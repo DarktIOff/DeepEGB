@@ -216,18 +216,5 @@ def relic_gw_spectrum(
 
 
 # ---------------------------------------------------------------------------
-# Sensitivity-band helpers (rough)
+# (Detector catalogue moved to `detectors.py` — import from there.)
 # ---------------------------------------------------------------------------
-EXPERIMENT_BANDS = {
-    "PTA":      (1e-9, 1e-7),         # nHz
-    "LISA":     (1e-4, 1e-1),         # mHz
-    "DECIGO":   (1e-2, 1e1),          # 0.01 to 10 Hz
-    "ET":       (1e0,  1e3),          # 1 Hz to 1 kHz
-    "LIGO":     (1e1,  1e3),          # 10 Hz to 1 kHz
-    "CMB-pol":  (1e-18, 1e-15),       # CMB B-mode-relevant (very low f)
-}
-
-
-def in_band(f_Hz: np.ndarray, band: str) -> np.ndarray:
-    lo, hi = EXPERIMENT_BANDS[band]
-    return (f_Hz >= lo) & (f_Hz <= hi)

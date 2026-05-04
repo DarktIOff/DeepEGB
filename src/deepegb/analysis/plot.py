@@ -19,7 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 from ..physics import (
-    EXPERIMENT_BANDS,
+    DETECTORS,
     background_along,
     compute_c_T2,
     compute_observables_full,
@@ -132,6 +132,19 @@ def plot_egb_model(
     return str(out_path)
 
 
+PROBE_COLORS = {
+    "PTA": "#1f77b4",
+    "space": "#ff7f0e",
+    "ground": "#2ca02c",
+    "CMB": "#9467bd",
+}
+ERA_LINESTYLES = {
+    "current":  "-",
+    "planned":  "--",
+    "proposed": ":",
+}
+
+
 def plot_relic_gw_spectrum(
     V_expr: str,
     xi_expr: str = "0",
@@ -143,9 +156,18 @@ def plot_relic_gw_spectrum(
     out_path: str | Path = "relic_gw.png",
     title: str | None = None,
     phi_range: tuple[float, float] = (-15.0, 15.0),
+    detectors: tuple[str, ...] | None = None,
+    show_eras: tuple[str, ...] = ("current", "planned", "proposed"),
 ) -> str:
-    """Plot Ω_GW(f) h² across the relic GW frequency band, with shaded
-    overlays for PTA, LISA, DECIGO, ET/LIGO sensitivity ranges."""
+    """Plot Ω_GW(f) h² across the relic-GW frequency band with overlay of
+    detector sensitivity curves from the catalogue in `physics.detectors`.
+
+    Parameters
+    ----------
+    detectors  : explicit list of detector names to overlay; default = all.
+    show_eras  : restrict overlays to detectors in these eras
+                 (`current`, `planned`, `proposed`).
+    """
     model = expressions_to_model(V_expr, xi_expr)
     traj = integrate_with_pivot(model, N_pivot=N, phi_range=phi_range)
     if traj is None:
@@ -155,23 +177,46 @@ def plot_relic_gw_spectrum(
     k_arr = k_pivot * np.logspace(-n_decades / 2, n_decades / 2, n_k)
     spec = relic_gw_spectrum(model, k_arr, traj=traj, N_pivot=N, T_reh_GeV=T_reh_GeV)
 
-    fig, ax = plt.subplots(1, 1, figsize=(11, 6))
+    fig, ax = plt.subplots(1, 1, figsize=(13, 7))
+
+    # 1. The model's predicted Ω_GW
     if spec.f_today is not None:
         valid = np.isfinite(spec.Omega_GW_h2) & (spec.Omega_GW_h2 > 0)
         ax.loglog(spec.f_today[valid], spec.Omega_GW_h2[valid],
-                  "o-", lw=2, ms=5, color="C3", label=r"$\Omega_{\rm GW} h^2$")
+                  "o-", lw=2.4, ms=5, color="#d62728",
+                  zorder=10, label=r"$\Omega_{\rm GW}\,h^2$  (this model)")
 
-        # Experimental band overlays
-        colors = {"PTA": "C0", "LISA": "C1", "DECIGO": "C4", "ET": "C2",
-                  "LIGO": "C7", "CMB-pol": "C5"}
-        for band, (lo, hi) in EXPERIMENT_BANDS.items():
-            ax.axvspan(lo, hi, alpha=0.10, color=colors.get(band, "grey"),
-                       label=band)
+    # 2. Detector sensitivity curves
+    if spec.f_today is not None:
+        f_min = max(min(spec.f_today.min() * 0.1, 1e-19), 1e-22)
+        f_max = max(spec.f_today.max() * 10, 1e4)
+    else:
+        f_min, f_max = 1e-19, 1e4
+    f_grid = np.logspace(np.log10(f_min), np.log10(f_max), 400)
+
+    detector_set = set(detectors) if detectors else None
+    for d in DETECTORS:
+        if d.era not in show_eras:
+            continue
+        if detector_set is not None and d.name not in detector_set:
+            continue
+        sens = d.sensitivity(f_grid)
+        finite = np.isfinite(sens)
+        if not finite.any():
+            continue
+        ax.plot(
+            f_grid[finite], sens[finite],
+            color=PROBE_COLORS.get(d.probe, "grey"),
+            ls=ERA_LINESTYLES.get(d.era, "-"),
+            lw=1.4, alpha=0.85, label=f"{d.name} ({d.probe}, {d.era})",
+        )
 
     ax.set_xlabel(r"$f$ today  [Hz]")
     ax.set_ylabel(r"$\Omega_{\rm GW}\,h^2$")
     ax.grid(alpha=0.25, which="both")
-    ax.legend(loc="lower right", fontsize=8, ncol=2)
+    ax.set_xlim(f_min, f_max)
+    ax.set_ylim(1e-22, 1e-3)
+    ax.legend(loc="upper right", fontsize=7, ncol=2, framealpha=0.85)
     ax.set_title(title or
                  f"Relic GW spectrum:  V={V_expr},  ξ={xi_expr},  T_reh={T_reh_GeV} GeV")
 

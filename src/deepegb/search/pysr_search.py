@@ -1,24 +1,15 @@
 """
 Joint symbolic regression for V(φ) and ξ(φ) in EGB inflation.
 
-Two strategies are supported:
+Strategy: **two-pass joint search**.
+  a. SR for V(φ) with ξ ≡ 0 (Einstein-frame baseline).
+  b. With each top-K V candidate frozen, SR for ξ(φ) that improves the χ²
+     further. The winner is the (V, ξ) pair with lowest combined loss.
 
-1. **Two-pass joint search** (default for v0.1):
-     a. SR for V(φ) with ξ ≡ 0 (Einstein-frame baseline).
-     b. With each top-K V candidate frozen, SR for ξ(φ) that improves the χ²
-        loss further. The "joint" winner is the (V, ξ) pair with lowest combined
-        loss.
-   This is much cheaper than truly joint multi-output SR and works well as a
-   starting point.
-
-2. **Joint multi-output SR** (`mode="joint"`):
-   Use PySR's multi-output mode to evolve V and ξ together. Slower per
-   iteration but explores correlated structure.
-
-Both modes share a custom χ² loss that calls our Python EGB kernel. For real
-runs we recommend providing a Julia-side mirror (see `physics/kernel.jl`)
-through PySR's `loss_function` argument; the Python loss here is correct but
-≈100× slower in tight loops.
+The χ² is computed by `chi2_full` (slow-roll closed-form) or
+`chi2_relic_gw` (full Mukhanov-Sasaki + Ω_GW transfer). Both come from
+`physics/egb_perturbations.py`. The legacy leading-order kernel
+(`r = 16ε`, etc.) has been removed; production runs only.
 """
 from __future__ import annotations
 
@@ -33,9 +24,7 @@ import sympy as sp
 
 from ..physics import (
     EGBModel,
-    analyze_model,
     chi2_full,
-    chi2_loss,
     chi2_relic_gw,
     compute_observables_full,
 )
@@ -70,11 +59,13 @@ class SearchConfig:
     N_pivot: float = 55.0
 
     # Loss kernel:
-    #   "production"     — slow-roll closed-form, ~10 ms / call (default).
-    #   "leading_order"  — toy 16ε / closed-form n_s for cross-checks.
-    #   "production_gw"  — full background EOMs + Mukhanov-Sasaki for tensor
-    #                      modes + relic-GW transfer function. ~0.5–2 s / call;
-    #                      use with smaller niters/populations.
+    #   "production"     — slow-roll closed-form (background EOMs + full
+    #                      perturbation kernel with c_T², c_S²). ~10 ms / call,
+    #                      default for n_s/r searches.
+    #   "production_gw"  — full background ODE + Mukhanov-Sasaki for the
+    #                      target k modes + relic-GW transfer.
+    #                      ~0.5–2 s / call; required when omega_gw_targets
+    #                      or omega_gw_band_min are set.
     loss_kind: str = "production"
 
     # Relic-GW targets (only used when loss_kind == "production_gw").
@@ -171,29 +162,9 @@ def chi2_for_expressions(
     xi_expr: str,
     cfg: SearchConfig,
 ) -> float:
-    """Evaluate χ² for an (V, ξ) expression pair.
-
-    Routes through the production-grade kernel by default (cfg.loss_kind ==
-    "production"), and falls back to the toy 16ε kernel for cross-checks.
-    """
+    """Evaluate χ² for a (V, ξ) expression pair using the production kernel."""
     try:
         model = expressions_to_model(V_expr, xi_expr)
-        if cfg.loss_kind == "production":
-            obs_full = compute_observables_full(
-                model,
-                N_pivot=cfg.N_pivot,
-                phi_range=cfg.phi_search_range,
-                n_grid=cfg.phi_search_grid,
-            )
-            return chi2_full(
-                obs_full,
-                target_ns=cfg.target_ns, sigma_ns=cfg.sigma_ns,
-                target_r=cfg.target_r, sigma_r=cfg.sigma_r,
-                target_lnAs=cfg.target_lnAs, sigma_lnAs=cfg.sigma_lnAs,
-                target_alphas=cfg.target_alphas, sigma_alphas=cfg.sigma_alphas,
-                target_nT=cfg.target_nT, sigma_nT=cfg.sigma_nT,
-                target_cT2=cfg.target_cT2, sigma_cT2=cfg.sigma_cT2,
-            )
         if cfg.loss_kind == "production_gw":
             return chi2_relic_gw(
                 model,
@@ -205,36 +176,36 @@ def chi2_for_expressions(
                 N_pivot=cfg.N_pivot,
                 T_reh_GeV=cfg.T_reh_GeV,
             )
-        # leading-order toy
-        obs = analyze_model(
+        # production (default): slow-roll closed-form with full perturbations
+        obs_full = compute_observables_full(
             model,
-            N_target=cfg.N_pivot,
+            N_pivot=cfg.N_pivot,
             phi_range=cfg.phi_search_range,
             n_grid=cfg.phi_search_grid,
         )
-        return chi2_loss(
-            obs,
+        return chi2_full(
+            obs_full,
             target_ns=cfg.target_ns, sigma_ns=cfg.sigma_ns,
             target_r=cfg.target_r, sigma_r=cfg.sigma_r,
+            target_lnAs=cfg.target_lnAs, sigma_lnAs=cfg.sigma_lnAs,
+            target_alphas=cfg.target_alphas, sigma_alphas=cfg.sigma_alphas,
+            target_nT=cfg.target_nT, sigma_nT=cfg.sigma_nT,
+            target_cT2=cfg.target_cT2, sigma_cT2=cfg.sigma_cT2,
         )
     except Exception:
         return 1.0e6
 
 
 def observables_for_result(V_expr: str, xi_expr: str, cfg: SearchConfig) -> dict:
-    """Return the production-grade observable dict for a (V, ξ) pair, used to
-    populate `SearchResult` after PySR finishes."""
+    """Production-grade observables for a (V, ξ) pair (slow-roll closed-form
+    is fine here — used only for ranking, not for the loss)."""
     try:
         model = expressions_to_model(V_expr, xi_expr)
-        if cfg.loss_kind == "production":
-            o = compute_observables_full(
-                model, N_pivot=cfg.N_pivot,
-                phi_range=cfg.phi_search_range, n_grid=cfg.phi_search_grid,
-            )
-            return o.as_dict()
-        o2 = analyze_model(model, N_target=cfg.N_pivot,
-                           phi_range=cfg.phi_search_range, n_grid=cfg.phi_search_grid)
-        return o2.as_dict()
+        o = compute_observables_full(
+            model, N_pivot=cfg.N_pivot,
+            phi_range=cfg.phi_search_range, n_grid=cfg.phi_search_grid,
+        )
+        return o.as_dict()
     except Exception:
         return {}
 

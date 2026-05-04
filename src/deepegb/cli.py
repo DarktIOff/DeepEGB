@@ -45,10 +45,10 @@ def main() -> None:
 @click.option("--top", default=5, type=int, show_default=True,
               help="How many candidates to print.")
 @click.option("--loss", "loss_kind",
-              type=click.Choice(["production", "leading_order", "production_gw"]),
+              type=click.Choice(["production", "production_gw"]),
               default="production", show_default=True,
-              help="`production` (slow-roll, fast), `leading_order` (toy 16ε), "
-                   "or `production_gw` (full MS + Ω_GW; slow but accurate).")
+              help="`production` (slow-roll closed-form, ~10 ms/eval) or "
+                   "`production_gw` (full MS + Ω_GW transfer, ~1 s/eval).")
 @click.option("--gw-target", "gw_targets", multiple=True,
               help="Add an Ω_GW target. Format: 'F_HZ:OMEGA_TARGET:SIGMA' "
                    "(repeatable). Example: --gw-target 1e-3:1e-12:5e-13 "

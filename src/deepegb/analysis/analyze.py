@@ -1,15 +1,12 @@
 """High-level analyze tool: takes string expressions, returns observables.
 
-Uses the **production-grade** EGB perturbation module (egb_perturbations.py),
-which returns n_s, n_T, r, α_s, P_S, P_T, c_T², c_S² with the GB-corrected
-forms of the slow-roll parameters and tensor sound speed.
+Uses the **production** EGB perturbation kernel (egb_perturbations.py):
+n_s, n_T, r, α_s, P_S, P_T, c_T², c_S² with the GB-corrected slow-roll
+parameters and tensor / scalar sound speeds. For relic-GW analysis,
+`analyze_egb_relic_gw` integrates the full background EOMs and the
+tensor Mukhanov-Sasaki equation across a frequency band.
 
-For relic-GW analysis, see `analyze_egb_relic_gw` which integrates the
-Mukhanov–Sasaki equations (egb_modes.py) over the full background
-trajectory (egb_background.py) and computes Ω_GW(f) h² today (relic_gw.py).
-
-Set ``leading_order=True`` to fall back to the simple (1/2 Q V'/V²) toy
-kernel; only useful for cross-checks.
+The legacy leading-order toy kernel has been removed.
 """
 from __future__ import annotations
 
@@ -18,7 +15,6 @@ from typing import Any
 import numpy as np
 
 from ..physics import (
-    analyze_model,
     compute_observables_full,
     integrate_with_pivot,
     k_inflation_to_today_Mpc_inv,
@@ -37,30 +33,19 @@ def analyze_egb_model(
     N: float = 55.0,
     phi_range: tuple[float, float] = (-15.0, 15.0),
     n_grid: int = 4001,
-    leading_order: bool = False,
 ) -> dict[str, Any]:
     """Compute observables (n_s, n_T, r, α_s, P_S, P_T, c_T², c_S²) for an EGB
     model given as Sympy-style strings in `phi`.
 
     Parameters
     ----------
-    V_expr        : V(φ) expression. Use ``phi`` as the field.
-    xi_expr       : ξ(φ) expression. Pass ``"0"`` for the GR limit.
-    N             : Number of e-folds before end of inflation at the pivot.
-    phi_range     : Bracket for φ scanning.
-    n_grid        : Resolution of the φ scan.
-    leading_order : If True, fall back to the simple (1/2 Q V'/V²) kernel
-                    (no c_T, n_T, P_S, P_T amplitudes). Only for cross-checks.
+    V_expr    : V(φ) expression. Use ``phi`` as the field.
+    xi_expr   : ξ(φ) expression. Pass ``"0"`` for the GR limit.
+    N         : Number of e-folds before end of inflation at the pivot.
+    phi_range : Bracket for φ scanning.
+    n_grid    : Resolution of the φ scan.
     """
     model = expressions_to_model(V_expr, xi_expr)
-    if leading_order:
-        obs = analyze_model(model, N_target=N, phi_range=phi_range, n_grid=n_grid)
-        return {
-            "V_expr": V_expr, "xi_expr": xi_expr, "N": N,
-            "method": "leading_order",
-            **obs.as_dict(),
-            "valid": obs.is_valid,
-        }
     full = compute_observables_full(model, N_pivot=N, phi_range=phi_range, n_grid=n_grid)
     return {
         "V_expr": V_expr, "xi_expr": xi_expr, "N": N,

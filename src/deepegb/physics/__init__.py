@@ -1,10 +1,16 @@
+"""Physics kernels for EGB inflation.
+
+Single production stack:
+  - egb_slow_roll.py    EGBModel + φ-trajectory utilities (no toy observables)
+  - egb_background.py   Full Friedmann + KG ODE integration (solve_ivp)
+  - egb_perturbations.py Slow-roll closed-form observables w/ full c_T², c_S²
+  - egb_modes.py         Mukhanov-Sasaki mode integration (P_T, P_S exact)
+  - relic_gw.py          Ω_GW(f) h² with detector sensitivity overlay
+  - detectors.py         Catalogue of GW experiments and their Ω_GW floors
+"""
 from .egb_slow_roll import (
     EGBModel,
-    Observables,
-    analyze_model,
-    chi2_loss,
     end_of_inflation,
-    horizon_crossing,
 )
 from .egb_perturbations import (
     FullObservables,
@@ -33,18 +39,20 @@ from .relic_gw import (
     relic_gw_spectrum,
     k_inflation_to_today_Mpc_inv,
     k_today_Mpc_inv_to_freq_Hz,
-    EXPERIMENT_BANDS,
+)
+from .detectors import (
+    Detector,
+    DETECTORS,
+    detector_by_name,
+    detectors_in_band,
+    sensitivity_at,
 )
 
 __all__ = [
-    # leading-order kernel (kept for backward-compat & sanity checks)
+    # Core data types and trajectory
     "EGBModel",
-    "Observables",
-    "analyze_model",
-    "chi2_loss",
     "end_of_inflation",
-    "horizon_crossing",
-    # slow-roll perturbation kernel
+    # Slow-roll closed-form observables (production)
     "FullObservables",
     "background_at",
     "background_along",
@@ -54,12 +62,12 @@ __all__ = [
     "compute_c_T2",
     "compute_observables_full",
     "power_spectra_at",
-    # full background EOM integration
+    # Full background EOM integration
     "BackgroundTrajectory",
     "integrate_background",
     "integrate_with_pivot",
     "hubble_from_constraint",
-    # Mukhanov-Sasaki mode integration
+    # Mukhanov-Sasaki
     "tensor_power_spectrum",
     "scalar_power_spectrum",
     "k_pivot_from_traj",
@@ -68,5 +76,10 @@ __all__ = [
     "relic_gw_spectrum",
     "k_inflation_to_today_Mpc_inv",
     "k_today_Mpc_inv_to_freq_Hz",
-    "EXPERIMENT_BANDS",
+    # Detectors
+    "Detector",
+    "DETECTORS",
+    "detector_by_name",
+    "detectors_in_band",
+    "sensitivity_at",
 ]
