@@ -1,0 +1,56 @@
+# DeepEGB default configuration.
+
+physics:
+  # Pivot e-folds before end of inflation at which observables are evaluated.
+  N_pivot: 55
+  # Range of phi (in M_pl) to sample when searching for end-of-inflation.
+  phi_range: [-15.0, 15.0]
+  # Numerical step for derivatives / integration.
+  d_phi: 1.0e-3
+  # Reduced Planck mass (we work in units M_pl = 1).
+  M_pl: 1.0
+
+search:
+  # PySR genetic-programming hyperparameters.
+  niterations: 40
+  populations: 35
+  population_size: 33
+  maxsize: 25
+  binary_operators: ["+", "-", "*", "/", "^"]
+  unary_operators: ["exp", "log", "sqrt", "tanh"]
+  # Multi-output: PySR will discover (V(phi), xi(phi)) jointly.
+  outputs: ["V", "xi"]
+  # Penalty on complexity to discourage overfit.
+  parsimony: 1.0e-3
+  # Optional: warm-start from these ansaetze (free constants will be tuned).
+  seed_expressions:
+    V:
+      - "phi^2"
+      - "(1 - exp(-phi))^2"        # Starobinsky-like
+      - "1 - 8.0 / phi^2"           # ACT-favored Kallosh family
+    xi:
+      - "0"                         # GR limit
+      - "xi0 * exp(-lambda * phi)"  # commonly used in EGB inflation
+      - "xi0 / V(phi)"              # Kanti-style "natural" coupling
+
+targets:
+  # ACT DR6 reference (used in DeepInflation example).
+  ns: 0.974
+  ns_sigma: 0.003
+  r: 0.0
+  r_sigma: 0.018
+
+llm:
+  # See .env for endpoint and keys.
+  default_provider: local
+  temperature: 0.4
+  max_tokens: 4096
+  # Tool-call retry on parse failures (local models can be flaky).
+  tool_call_retries: 3
+
+agent:
+  # Cap how long a single SR delegation can run, in seconds.
+  sr_timeout_s: 1800
+  # Where to dump intermediate runs.
+  runs_dir: "runs"
+  outputs_dir: "outputs"

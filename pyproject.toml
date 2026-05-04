@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepegb"
+version = "0.1.0"
+description = "AI agent for inflation model discovery in Einstein-Gauss-Bonnet gravity."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Gevorg Manucharyan" }]
+license = { text = "MIT" }
+
+dependencies = [
+    # Core numerics
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "sympy>=1.12",
+    "matplotlib>=3.8",
+
+    # Symbolic regression
+    "pysr>=0.19",
+
+    # Agent framework + LLM providers
+    "agno>=0.5",
+    "openai>=1.40",          # llama.cpp /v1 endpoint also works through this
+    "anthropic>=0.40",
+    "tenacity>=8.2",
+    "pydantic>=2.5",
+    "python-dotenv>=1.0",
+
+    # CLI / UX
+    "click>=8.1",
+    "rich>=13.7",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+rag = [
+    "sentence-transformers>=2.7",
+    "faiss-cpu>=1.7",
+    "pdfplumber>=0.10",
+    "rank-bm25>=0.2",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ipykernel>=6.29",
+    "jupyter>=1.0",
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+deepegb = "deepegb.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
