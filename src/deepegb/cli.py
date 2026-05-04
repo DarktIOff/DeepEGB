@@ -216,10 +216,91 @@ def relic_gw(v_expr: str, xi_expr: str, N_pivot: float,
               help="LLM provider (default: $DEEPEGB_PROVIDER or 'local').")
 @click.option("--message", "-m", default=None,
               help="Send a single message and exit (non-interactive).")
-def chat(provider: str | None, message: str | None) -> None:
+@click.option("--no-arxiv", is_flag=True, default=False,
+              help="Disable the arXiv MCP tools.")
+@click.option("--no-rag", is_flag=True, default=False,
+              help="Disable the local-RAG `retrieve_literature` tool.")
+def chat(provider: str | None, message: str | None,
+         no_arxiv: bool, no_rag: bool) -> None:
     """Interactive chat with the DeepEGB agent team."""
     from .agent import run_chat
-    run_chat(initial_message=message, provider=provider)
+    run_chat(
+        initial_message=message, provider=provider,
+        enable_arxiv_mcp=not no_arxiv, enable_local_rag=not no_rag,
+    )
+
+
+# ---------------------------------------------------------------------------
+# rag
+# ---------------------------------------------------------------------------
+@main.group()
+def rag() -> None:
+    """Manage the local Retrieval-Augmented Generation index."""
+
+
+@rag.command(name="index")
+@click.argument("folder", required=False)
+@click.option("--index-dir", default=None, type=click.Path(),
+              help="Where to write the index. Default: ~/.deepegb/rag_index.")
+@click.option("--model", "embedding_model", default=None,
+              help="sentence-transformers model. Default: BAAI/bge-small-en-v1.5.")
+@click.option("--max-chars", default=1800, type=int,
+              help="Max chunk size in characters.")
+@click.option("--overlap", default=200, type=int,
+              help="Chunk overlap in characters.")
+def rag_index(folder: str | None, index_dir: str | None,
+              embedding_model: str | None, max_chars: int, overlap: int) -> None:
+    """Build (or rebuild) the local RAG index from a folder of papers.
+
+    FOLDER defaults to $DEEPEGB_RAG_PATH or ~/University/PhD/PhD/papers.
+    Walks recursively for PDF / TeX / HTML / Markdown / plain-text files.
+    """
+    import os
+    from .rag import DEFAULT_INDEX_DIR, DEFAULT_MODEL, build_index
+
+    if folder is None:
+        folder = os.environ.get("DEEPEGB_RAG_PATH",
+                                str(Path.home() / "University/PhD/PhD/papers"))
+    idx_dir = Path(index_dir) if index_dir else DEFAULT_INDEX_DIR
+    model = embedding_model or DEFAULT_MODEL
+    meta = build_index(
+        Path(folder), index_dir=idx_dir,
+        embedding_model=model, max_chars=max_chars, overlap=overlap,
+    )
+    click.echo(f"\nDone. {meta.n_chunks} chunks indexed at {idx_dir}.")
+
+
+@rag.command(name="query")
+@click.argument("query")
+@click.option("--k", default=5, type=int, help="Number of results.")
+@click.option("--alpha", default=0.6, type=float,
+              help="Weight on dense vs BM25 (1=dense only, 0=BM25 only).")
+@click.option("--index-dir", default=None, type=click.Path())
+def rag_query(query: str, k: int, alpha: float, index_dir: str | None) -> None:
+    """Query the local RAG index. Prints chunks ranked by hybrid score."""
+    from .rag import DEFAULT_INDEX_DIR, format_hits_for_llm, hybrid_retrieve
+
+    idx_dir = Path(index_dir) if index_dir else DEFAULT_INDEX_DIR
+    hits = hybrid_retrieve(query, index_dir=idx_dir, k=k, alpha=alpha)
+    if not hits:
+        click.echo("No hits.")
+        return
+    click.echo(format_hits_for_llm(hits))
+
+
+@rag.command(name="info")
+@click.option("--index-dir", default=None, type=click.Path())
+def rag_info(index_dir: str | None) -> None:
+    """Show metadata about the existing RAG index."""
+    import json as _json
+    from .rag import DEFAULT_INDEX_DIR, index_exists
+
+    idx_dir = Path(index_dir) if index_dir else DEFAULT_INDEX_DIR
+    if not index_exists(idx_dir):
+        click.echo(f"No index at {idx_dir}. Run `deepegb rag index <folder>` first.")
+        return
+    meta = (Path(idx_dir) / "metadata.json").read_text()
+    click.echo(_json.dumps(_json.loads(meta), indent=2))
 
 
 if __name__ == "__main__":

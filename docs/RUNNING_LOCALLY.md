@@ -219,15 +219,104 @@ JSON-dumps in `runs/results.json` after each `deepegb search`.
   break the GR limit, or include `--target-cT2 1.05` to demand a non-trivial
   tensor sound speed.
 
-## 9. Next moves
+## 9. Local RAG over your papers
+
+DeepEGB can index a folder of PDFs / TeX / HTML / Markdown / plain-text and
+expose a `retrieve_literature` tool to the agent. Hybrid retrieval (dense
+FAISS + sparse BM25) over your local copy of the relevant literature.
+
+```bash
+# Install the RAG extras (one-time):
+pip install -e ".[rag]"
+```
+
+This pulls `sentence-transformers`, `faiss-cpu`, `rank-bm25`, `pdfplumber`.
+First run will download the embedding model (~30 MB for the default
+`BAAI/bge-small-en-v1.5`).
+
+Build the index:
+
+```bash
+# Default: walks ~/University/PhD/PhD/papers (or whatever DEEPEGB_RAG_PATH says)
+deepegb rag index
+
+# Or specify any folder explicitly:
+deepegb rag index ~/Reading/EGB-inflation
+```
+
+Inspect:
+
+```bash
+deepegb rag info
+# {"embedding_model": "...", "n_chunks": 1842, "d_embed": 384, ...}
+```
+
+Query directly (no LLM needed):
+
+```bash
+deepegb rag query "Hwang-Noh tensor sound speed in scalar-Gauss-Bonnet"
+deepegb rag query "ACT DR6 favored EGB inflation models" --k 8
+```
+
+When you launch `deepegb chat`, the agent automatically uses
+`retrieve_literature_tool` to ground statements about specific models or
+papers. Disable with `deepegb chat --no-rag`.
+
+The index lives at `~/.deepegb/rag_index/` (override with `--index-dir`).
+Re-run `deepegb rag index` whenever you add new papers — currently a full
+rebuild; incremental updates are on the to-do list.
+
+## 10. arXiv MCP server (live arXiv search)
+
+For papers you don't have on disk yet, DeepEGB integrates with
+[blazickjp/arxiv-mcp-server](https://github.com/blazickjp/arxiv-mcp-server)
+through Agno's MCP support. Install it:
+
+```bash
+# One-time install via uv (recommended):
+brew install uv          # if you don't already have it
+# Verify:
+uvx arxiv-mcp-server --help
+```
+
+The default `.env` value is
+
+```dotenv
+DEEPEGB_ARXIV_MCP_CMD=uvx arxiv-mcp-server --storage-path ~/.deepegb/arxiv_papers
+```
+
+which spawns the server on demand and caches downloaded papers under
+`~/.deepegb/arxiv_papers/`. If you have a permanent install, override:
+
+```dotenv
+DEEPEGB_ARXIV_MCP_CMD=python -m arxiv_mcp_server --storage-path ~/papers/arxiv
+```
+
+Tools the agent gets when MCP is connected (depends on the MCP server
+version): `search_papers`, `download_paper`, `read_paper`, `list_papers`.
+The agent will use these for queries like *"find me 2025 EGB inflation
+papers favored by ACT DR6 data"*.
+
+Disable with `deepegb chat --no-arxiv` if you want to keep the run offline.
+
+When you launch chat:
+
+```
+[DeepEGB] arXiv MCP connected.
+DeepEGB ready — type your request (/exit to quit).
+> find me recent EGB inflation models tested against ACT DR6
+…
+```
+
+## 11. Next moves
 
 * When you eventually run on the Strix Halo box, switch
   `DEEPEGB_PROVIDER=local` and point `DEEPEGB_LLM_BASE_URL` at your
-  llama.cpp `/v1` endpoint. Nothing else changes.
+  llama.cpp `/v1` endpoint. Nothing else changes — same RAG, same MCP.
 * For thesis-quality runs, use `--loss production_gw` with a band target
   matched to your detector of interest (LISA at 1e-4 to 1e-1 Hz; DECIGO
   at 0.01 to 10; PTAs at 1e-9 to 1e-7).
 * If the GLM agent is the bottleneck (because tool-calling is flaky),
-  use the **CLI directly** (`deepegb search …`) — it doesn't need any LLM
-  and is the fastest way to actually find candidates. Then ask the agent
-  to *interpret* the candidates rather than discover them.
+  use the **CLI directly** (`deepegb search …`, `deepegb rag query …`) —
+  it doesn't need any LLM and is the fastest way to actually find
+  candidates. Then ask the agent to *interpret* them.

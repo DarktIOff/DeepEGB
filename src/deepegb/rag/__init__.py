@@ -1,15 +1,38 @@
-"""RAG over EGB-inflation literature (v2 — stubbed for MVP).
+"""Local RAG over EGB-inflation literature.
 
-Planned implementation:
-- Walk a directory of PDFs (default: ~/University/PhD/PhD/papers).
-- Chunk by section using `pdfplumber`.
-- Embed with `sentence-transformers` (e.g. all-MiniLM-L6-v2 or bge-small).
-- Hybrid retrieval: dense FAISS + sparse BM25, as in DeepInflation.
-- Expose a `retrieve_literature(query, k=5)` tool to the main agent.
-
-For now, importing this submodule is a no-op so the rest of the package can
-load without the optional `rag` extras.
+Implementation:
+- Walk a directory of PDFs / TeX / HTML / Markdown / plain text.
+- Chunk by section using format-specific loaders (`loaders.py`).
+- Embed with `sentence-transformers` (default BGE-small, 384-dim).
+- Hybrid retrieval: dense FAISS + sparse BM25, weighted by α (default 0.6).
+- Persistent on-disk index under `~/.deepegb/rag_index/` (override via env).
 """
 from __future__ import annotations
 
-__all__: list[str] = []
+from .chunker import Chunk, chunk_file, chunk_folder
+from .index import (
+    DEFAULT_INDEX_DIR,
+    DEFAULT_MODEL,
+    IndexMeta,
+    build_index,
+    embed_texts,
+    index_exists,
+    load_index,
+)
+from .retrieve import RetrievalHit, format_hits_for_llm, hybrid_retrieve
+
+__all__ = [
+    "Chunk",
+    "chunk_file",
+    "chunk_folder",
+    "DEFAULT_INDEX_DIR",
+    "DEFAULT_MODEL",
+    "IndexMeta",
+    "build_index",
+    "embed_texts",
+    "index_exists",
+    "load_index",
+    "RetrievalHit",
+    "format_hits_for_llm",
+    "hybrid_retrieve",
+]

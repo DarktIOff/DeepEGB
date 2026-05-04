@@ -7,10 +7,11 @@ side-effect-free (apart from the plot-saving tool).
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
-from ..analysis import analyze_egb_model, plot_egb_model
+from ..analysis import analyze_egb_model, analyze_egb_relic_gw, plot_egb_model
 from ..search import SearchConfig, run_joint_search
 
 
@@ -76,15 +77,82 @@ def plot_egb_model_tool(
     N: float = 55.0,
     out_path: str = "outputs/egb_diagnostic.png",
 ) -> str:
-    """Render a 4-panel diagnostic plot for an EGB inflation model and save
+    """Render a 6-panel diagnostic plot for an EGB inflation model and save
     it to disk. Returns the saved path as a string.
     """
     p = plot_egb_model(V_expr, xi_expr, N=N, out_path=out_path)
     return f"Saved diagnostic plot to: {p}"
 
 
+def relic_gw_spectrum_tool(
+    V_expr: str,
+    xi_expr: str = "0",
+    N: float = 55.0,
+    T_reh_GeV: float = 1.0e15,
+    n_decades: float = 10.0,
+    n_k: int = 24,
+) -> str:
+    """Compute the relic GW energy density Ω_GW(f) h² across the LISA / PTA /
+    DECIGO / ET frequency bands using full background EOMs + Mukhanov-Sasaki.
+
+    Parameters
+    ----------
+    V_expr     : V(φ) expression in `phi`.
+    xi_expr    : ξ(φ) expression. Pass "0" for the GR limit.
+    N          : pivot e-folds before end of inflation.
+    T_reh_GeV  : reheating temperature in GeV (controls g_* in transfer).
+    n_decades  : log-decades of k around pivot.
+    n_k        : number of k samples (more = slower but smoother).
+    """
+    return json.dumps(
+        analyze_egb_relic_gw(V_expr, xi_expr, N=N, n_decades=n_decades,
+                              n_k=n_k, T_reh_GeV=T_reh_GeV),
+        indent=2, default=str,
+    )
+
+
+def retrieve_literature_tool(query: str, k: int = 5) -> str:
+    """Search the local RAG index for chunks of EGB-inflation literature
+    relevant to a natural-language query. Returns formatted hits with
+    source filename, section title, and similarity score.
+
+    Build the index first with `deepegb rag index <folder>`. The default
+    folder is `~/University/PhD/PhD/papers` or whatever
+    `DEEPEGB_RAG_PATH` is set to.
+
+    Parameters
+    ----------
+    query : free-text query (e.g., "Starobinsky inflation slow-roll formulas",
+            "ACT DR6 constraints on EGB models").
+    k     : number of chunks to return (default 5; cap 20).
+    """
+    try:
+        from ..rag import format_hits_for_llm, hybrid_retrieve, index_exists
+    except ImportError:
+        return json.dumps({
+            "error": "RAG dependencies not installed. "
+                     "Run: pip install -e '.[rag]'"
+        })
+    if not index_exists():
+        return json.dumps({
+            "error": "No local RAG index. Build one with "
+                     "`deepegb rag index <folder>` first."
+        })
+    k = max(1, min(int(k), 20))
+    hits = hybrid_retrieve(query, k=k)
+    return format_hits_for_llm(hits)
+
+
 # ----------------------------------------------------------------------------
 # Helper to register tools with an Agno agent.
 # ----------------------------------------------------------------------------
-def all_tools() -> list:
-    return [search_egb_potentials, analyze_egb_model_tool, plot_egb_model_tool]
+def all_tools(include_rag: bool = True) -> list:
+    tools = [
+        search_egb_potentials,
+        analyze_egb_model_tool,
+        plot_egb_model_tool,
+        relic_gw_spectrum_tool,
+    ]
+    if include_rag:
+        tools.append(retrieve_literature_tool)
+    return tools

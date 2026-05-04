@@ -125,7 +125,11 @@ See `notebooks/01_smoke_test.ipynb` for a non-agent walk-through.
 - ✅ **Relic GW spectrum** — `relic_gw.py` computes `Ω_GW(f) h²` today
   with RD/MD transfer function and `g_*(T)` thresholds, mapping inflation
   `k` to today's frequency in Hz. CLI: `deepegb relic-gw …`
-- 🚧 RAG over local PDFs (stubbed; design in `src/deepegb/rag/__init__.py`).
+- ✅ **Local RAG** over PDFs / TeX / HTML / Markdown — `deepegb rag index`,
+  hybrid FAISS + BM25, exposed as `retrieve_literature_tool` to the agent.
+- ✅ **arXiv MCP** integration via Agno's MCPTools — agent can call
+  `search_papers`, `download_paper`, `read_paper` from
+  [blazickjp/arxiv-mcp-server](https://github.com/blazickjp/arxiv-mcp-server).
 - 🚧 Multi-field, hybrid exit, PBH-generating bumps.
 
 ## Acknowledgements
