@@ -77,29 +77,62 @@ def resolve_provider(name: str | None = None) -> ProviderConfig:
 
 
 def get_model(provider: str | None = None) -> Any:
-    """Build an Agno model for the requested provider."""
+    """Build an Agno model for the requested provider.
+
+    Notes
+    -----
+    Local LLMs served by `llama.cpp` typically default to a tiny
+    `n_predict` (~128 tokens) when `max_tokens` is not specified, which
+    cuts responses off mid-sentence. We force a generous default of
+    `DEEPEGB_LLM_MAX_TOKENS` (env, default 8192). API providers also
+    benefit but at higher cost per call; override via env if needed.
+    """
     cfg = resolve_provider(provider)
+    max_tokens = int(_env("DEEPEGB_LLM_MAX_TOKENS", default="8192"))
+    temperature = float(_env("DEEPEGB_LLM_TEMPERATURE", default="0.4"))
 
     if cfg.name in ("local", "openai", "zai"):
         if OpenAIChat is None:
             raise RuntimeError(
                 "Agno's OpenAIChat is not available. `pip install agno openai`."
             )
-        kwargs: dict[str, Any] = {"id": cfg.model}
+        kwargs: dict[str, Any] = {
+            "id": cfg.model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
         if cfg.base_url:
             kwargs["base_url"] = cfg.base_url
         if cfg.api_key:
             kwargs["api_key"] = cfg.api_key
-        return OpenAIChat(**kwargs)
+        # Some Agno versions name the kwarg `max_completion_tokens` instead.
+        try:
+            return OpenAIChat(**kwargs)
+        except TypeError:
+            kwargs.pop("max_tokens", None)
+            kwargs["max_completion_tokens"] = max_tokens
+            try:
+                return OpenAIChat(**kwargs)
+            except TypeError:
+                kwargs.pop("max_completion_tokens", None)
+                return OpenAIChat(**kwargs)
 
     if cfg.name == "anthropic":
         if Claude is None:
             raise RuntimeError(
                 "Agno's Claude model is not available. `pip install agno anthropic`."
             )
-        kwargs = {"id": cfg.model}
+        kwargs = {
+            "id": cfg.model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
         if cfg.api_key:
             kwargs["api_key"] = cfg.api_key
-        return Claude(**kwargs)
+        try:
+            return Claude(**kwargs)
+        except TypeError:
+            kwargs.pop("temperature", None)
+            return Claude(**kwargs)
 
     raise ValueError(f"Unknown provider: {cfg.name}")

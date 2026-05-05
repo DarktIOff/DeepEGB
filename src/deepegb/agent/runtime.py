@@ -207,6 +207,19 @@ OUTPUT STYLE
   analyse tool returned is a bug. Show the (n_s, r, n_T, c_T², ε)
   values explicitly.
 • Mention saved file paths (plots, search results) when produced.
+
+TOOL DISCIPLINE (READ TWICE)
+• If you say "let's analyze X", "I will compute Y", "let me check Z",
+  the very next thing you emit MUST be the corresponding tool call.
+  Never trail off with a "stay tuned" / "let's see" without immediately
+  invoking the tool.
+• Don't intersperse a tool call with conversational lead-ins. Make the
+  tool call FIRST, then narrate the results.
+• If you have to call multiple tools (e.g. analyze + plot + relic_gw),
+  emit them in sequence in a single response, not split across turns.
+• When a tool's JSON output contains numerical fields, copy the actual
+  numbers into your reply — don't paraphrase ("about 0.96") and don't
+  refer to the tool output without quoting it.
 """
 
 
@@ -266,29 +279,58 @@ def build_agent_team(
 build_agent = build_agent_team
 
 
-def _agent_say(agent, msg: str) -> None:
-    """Send a message to the agent and stream the response.
+def _agent_say(agent, msg: str, *, plain: bool = False) -> None:
+    """Send a message to the agent and stream the response to stdout.
 
-    Tolerates Agno API drift: tries `print_response`, then `run` with
-    streaming, then a plain blocking call.
+    Two modes:
+      * default — Agno's `print_response(stream=True)`, which uses Rich's
+        live panel.  Pretty, but the panel can grow taller than the
+        terminal, making mid-stream scrollback impossible.
+      * plain   — write each streamed chunk straight to stdout. Scroll-
+        friendly, redirectable to a file with `tee` / `>`.
+
+    Tolerates Agno API drift across versions.
     """
-    if hasattr(agent, "print_response"):
+    if not plain and hasattr(agent, "print_response"):
         try:
             agent.print_response(msg, stream=True)
             return
         except TypeError:
-            agent.print_response(msg)
-            return
+            try:
+                agent.print_response(msg)
+                return
+            except Exception:        # noqa: BLE001
+                pass     # fall through to plain mode
+
+    # Plain streaming: iterate chunks and print as they arrive.
     if hasattr(agent, "run"):
-        result = agent.run(msg)
-        # Result may be a generator / iterator (streaming) or a single object.
-        if hasattr(result, "__iter__") and not isinstance(result, str):
-            for chunk in result:
-                content = getattr(chunk, "content", None) or str(chunk)
+        try:
+            stream = agent.run(msg, stream=True)
+        except TypeError:
+            stream = agent.run(msg)
+        if hasattr(stream, "__iter__") and not isinstance(stream, str):
+            last_was_thought = False
+            for chunk in stream:
+                content = getattr(chunk, "content", None)
+                event = getattr(chunk, "event", "") or ""
+                # Agno emits various event types: RunResponse, ToolCall,
+                # ToolResult, ReasoningStep ... Tag the non-content ones.
+                if event and event.lower().startswith(("tool", "reasoning",
+                                                       "thinking")):
+                    if not last_was_thought:
+                        print(f"\n[{event}] ", end="", flush=True)
+                    last_was_thought = True
+                    if content:
+                        print(content, end="", flush=True)
+                    continue
+                last_was_thought = False
+                if content is None:
+                    continue
                 print(content, end="", flush=True)
             print()
-        else:
-            print(getattr(result, "content", str(result)))
+            return
+        # Single result object
+        print(getattr(stream, "content", str(stream)))
         return
     # Last resort
     print(agent(msg))
@@ -300,15 +342,16 @@ def run_chat(
     *,
     enable_arxiv_mcp: bool = True,
     enable_local_rag: bool = True,
+    plain: bool = False,
 ) -> None:
-    """Interactive REPL with the DeepEGB agent. /exit or Ctrl-D to quit."""
+    """Interactive REPL with the DeepEGB agent.  /exit or Ctrl-D to quit."""
     agent = build_agent_team(
         provider=provider,
         enable_arxiv_mcp=enable_arxiv_mcp,
         enable_local_rag=enable_local_rag,
     )
     if initial_message:
-        _agent_say(agent, initial_message)
+        _agent_say(agent, initial_message, plain=plain)
         if not __import__("sys").stdin.isatty():
             return     # one-shot mode under -m
 
@@ -323,4 +366,4 @@ def run_chat(
             continue
         if msg in {"/exit", "/quit", ":q"}:
             break
-        _agent_say(agent, msg)
+        _agent_say(agent, msg, plain=plain)

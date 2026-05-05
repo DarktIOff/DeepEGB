@@ -220,13 +220,17 @@ def relic_gw(v_expr: str, xi_expr: str, N_pivot: float,
               help="Disable the arXiv MCP tools.")
 @click.option("--no-rag", is_flag=True, default=False,
               help="Disable the local-RAG `retrieve_literature` tool.")
+@click.option("--plain", is_flag=True, default=False,
+              help="Plain text streaming (no Rich live panel). "
+                   "Scrollable, redirectable.")
 def chat(provider: str | None, message: str | None,
-         no_arxiv: bool, no_rag: bool) -> None:
-    """Interactive chat with the DeepEGB agent team."""
+         no_arxiv: bool, no_rag: bool, plain: bool) -> None:
+    """Interactive chat with the DeepEGB agent."""
     from .agent import run_chat
     run_chat(
         initial_message=message, provider=provider,
         enable_arxiv_mcp=not no_arxiv, enable_local_rag=not no_rag,
+        plain=plain,
     )
 
 
