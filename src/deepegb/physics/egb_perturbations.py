@@ -451,23 +451,144 @@ def chi2_full(
     sigma_nT: float = 0.1,
     target_cT2: float | None = None,     # GW170817 forces c_T² ≈ 1 today,
     sigma_cT2: float = 0.05,             # not during inflation; usually skip.
-    invalid_penalty: float = 1.0e6,
+    invalid_penalty: float = 1.0e6,      # legacy fallback for is_valid=False
+    model: "EGBModel | None" = None,     # NEW: enables soft penalty
 ) -> float:
-    """Generalised χ² in the (n_s, r, [optional A_s, α_s, n_T, c_T²]) plane."""
-    if not obs.is_valid:
-        return invalid_penalty
-    chi2 = ((obs.n_s - target_ns) / sigma_ns) ** 2
-    chi2 += ((obs.r - target_r) / sigma_r) ** 2
-    if target_lnAs is not None and obs.P_S > 0:
-        ln10As = np.log(1e10 * obs.P_S)
-        chi2 += ((ln10As - target_lnAs) / sigma_lnAs) ** 2
-    if target_alphas is not None and np.isfinite(obs.alpha_s):
-        chi2 += ((obs.alpha_s - target_alphas) / sigma_alphas) ** 2
-    if target_nT is not None and np.isfinite(obs.n_T):
-        chi2 += ((obs.n_T - target_nT) / sigma_nT) ** 2
-    if target_cT2 is not None and np.isfinite(obs.c_T2):
-        chi2 += ((obs.c_T2 - target_cT2) / sigma_cT2) ** 2
-    return float(chi2)
+    """Generalised χ² in the (n_s, r, [optional A_s, α_s, n_T, c_T²]) plane.
+
+    Returns the scalar PySR consumes. For the per-component breakdown +
+    failure reasons, use `chi2_full_with_breakdown` instead, which is
+    what the agent tools call.
+    """
+    bd = chi2_full_with_breakdown(
+        obs, target_ns=target_ns, sigma_ns=sigma_ns,
+        target_r=target_r, sigma_r=sigma_r,
+        target_lnAs=target_lnAs, sigma_lnAs=sigma_lnAs,
+        target_alphas=target_alphas, sigma_alphas=sigma_alphas,
+        target_nT=target_nT, sigma_nT=sigma_nT,
+        target_cT2=target_cT2, sigma_cT2=sigma_cT2,
+        invalid_penalty=invalid_penalty, model=model,
+    )
+    return bd.total
+
+
+def chi2_full_with_breakdown(
+    obs: FullObservables,
+    *,
+    target_ns: float,
+    sigma_ns: float = 0.003,
+    target_r: float = 0.0,
+    sigma_r: float = 0.018,
+    target_lnAs: float | None = None,
+    sigma_lnAs: float = 0.014,
+    target_alphas: float | None = None,
+    sigma_alphas: float = 0.013,
+    target_nT: float | None = None,
+    sigma_nT: float = 0.1,
+    target_cT2: float | None = None,
+    sigma_cT2: float = 0.05,
+    invalid_penalty: float = 1.0e6,
+    model: "EGBModel | None" = None,
+) -> "Chi2Breakdown":
+    """Atomized χ² with reasons. The agent tools surface this dict so the
+    LLM can see exactly which component is dominating the loss.
+    """
+    from .diagnostics import (
+        Chi2Breakdown,
+        chi2_full_breakdown,
+        soft_invalid_penalty,
+    )
+
+    if obs is None or not obs.is_valid:
+        # Soft penalty: even if observables can't be computed, give PySR
+        # a gradient by penalising HOW invalid the model is.
+        if model is not None:
+            soft, reasons = soft_invalid_penalty(model)
+        else:
+            soft = invalid_penalty
+            reasons = ["observables NaN; no model object passed for soft penalty"]
+        return Chi2Breakdown(
+            total=soft, components={}, reasons=reasons,
+            is_valid=False, soft_penalty=soft,
+        )
+
+    return chi2_full_breakdown(
+        obs,
+        target_ns=target_ns, sigma_ns=sigma_ns,
+        target_r=target_r, sigma_r=sigma_r,
+        target_lnAs=target_lnAs, sigma_lnAs=sigma_lnAs,
+        target_alphas=target_alphas, sigma_alphas=sigma_alphas,
+        target_nT=target_nT, sigma_nT=sigma_nT,
+        target_cT2=target_cT2, sigma_cT2=sigma_cT2,
+    )
+
+
+def integrate_background_robust(
+    model: "EGBModel",
+    *,
+    N_pivot: float = 55.0,
+    phi_range: tuple[float, float] = (-15.0, 15.0),
+    obs: "FullObservables | None" = None,
+):
+    """Try a ladder of φ-ranges / tolerances until the full background ODE
+    converges. Returns (traj, log_lines) where traj is `None` only if
+    every ladder step failed.
+    """
+    from .egb_background import integrate_background, integrate_with_pivot
+
+    log: list[str] = []
+    # Step 1: pivot-aware default
+    traj = integrate_with_pivot(model, N_pivot=N_pivot, phi_range=phi_range)
+    if traj is not None:
+        log.append("background OK with default pivot heuristic")
+        return traj, log
+    log.append("default integrate_with_pivot failed")
+
+    # Step 2: a φ-range derived from the slow-roll observables (if we have them)
+    if obs is not None and np.isfinite(obs.phi_end):
+        delta = max(20.0, abs(obs.phi_N - obs.phi_end) * 5.0
+                    if np.isfinite(obs.phi_N) else 20.0)
+        if (np.isfinite(obs.phi_N) and obs.phi_N > obs.phi_end):
+            traj_range = (obs.phi_end - 1.0, obs.phi_end + delta)
+        else:
+            traj_range = (obs.phi_end - delta, obs.phi_end + 1.0)
+        traj = integrate_with_pivot(model, N_pivot=N_pivot, phi_range=traj_range)
+        if traj is not None:
+            log.append(f"background OK with slow-roll-derived range {traj_range}")
+            return traj, log
+        log.append(f"slow-roll-derived range {traj_range} failed too")
+
+    # Step 3: explicit φ_init at +/-N_pivot+5 e-folds away from phi_end
+    if obs is not None and np.isfinite(obs.phi_end):
+        for sign in (+1, -1):
+            phi_init = float(obs.phi_end + sign *
+                             max(2.0, abs(obs.phi_N - obs.phi_end)))
+            for buf in (5.0, 10.0, 20.0):
+                traj = integrate_background(
+                    model, phi_init,
+                    N_max=N_pivot + buf + 20.0,
+                )
+                if traj is not None and traj.N_end > N_pivot:
+                    log.append(f"background OK with phi_init={phi_init:.3f}, "
+                               f"buffer={buf}")
+                    return traj, log
+        log.append("explicit-phi_init ladder also failed")
+
+    # Step 4: looser tolerances (handles stiff EGB)
+    if obs is not None and np.isfinite(obs.phi_end):
+        for rtol in (1e-7, 1e-5):
+            phi_init = float(obs.phi_end +
+                             (1 if obs.phi_N > obs.phi_end else -1) *
+                             max(2.0, abs(obs.phi_N - obs.phi_end)))
+            traj = integrate_background(
+                model, phi_init,
+                N_max=N_pivot + 25.0, rtol=rtol, atol=rtol * 1e-2,
+            )
+            if traj is not None and traj.N_end > N_pivot:
+                log.append(f"background OK with looser tol rtol={rtol}")
+                return traj, log
+    log.append("looser-tolerance ladder also failed")
+    return None, log
 
 
 def chi2_relic_gw(
@@ -477,120 +598,161 @@ def chi2_relic_gw(
     sigma_ns: float = 0.003,
     target_r: float = 0.0,
     sigma_r: float = 0.018,
-    # Relic-GW targets: list of (f_Hz, target_Omega_GW_h2, sigma) triples.
-    # Example: [(1e-3, 1e-12, 1e-12)] — try to hit Ω_GW = 10⁻¹² at LISA.
     omega_gw_targets: list[tuple[float, float, float]] | None = None,
-    # Optional minimum-amplitude target across a frequency band:
     omega_gw_band_min: tuple[float, float, float] | None = None,
-    # (f_lo_Hz, f_hi_Hz, target_min_Omega) — penalises spectra that are
-    # below `target_min_Omega` anywhere in [f_lo, f_hi]; encourages "loud"
-    # spectra in the band.
     N_pivot: float = 55.0,
     T_reh_GeV: float | None = 1.0e15,
-    # Standard slow-roll observables on top of GW targets:
     target_lnAs: float | None = None,
     sigma_lnAs: float = 0.014,
     phi_range: tuple[float, float] = (-15.0, 15.0),
     invalid_penalty: float = 1.0e8,
 ) -> float:
-    """χ² with full Mukhanov-Sasaki + relic-GW pipeline.
+    """Scalar χ² with full Mukhanov-Sasaki + relic-GW pipeline. Use
+    `chi2_relic_gw_with_breakdown` to get the per-component dict."""
+    bd = chi2_relic_gw_with_breakdown(
+        model, target_ns=target_ns, sigma_ns=sigma_ns,
+        target_r=target_r, sigma_r=sigma_r,
+        omega_gw_targets=omega_gw_targets,
+        omega_gw_band_min=omega_gw_band_min,
+        N_pivot=N_pivot, T_reh_GeV=T_reh_GeV,
+        target_lnAs=target_lnAs, sigma_lnAs=sigma_lnAs,
+        phi_range=phi_range, invalid_penalty=invalid_penalty,
+    )
+    return bd.total
 
-    EXPENSIVE: each call solves the full background EOMs and integrates the
-    tensor mode equation for every requested target frequency (≈ 0.5–1 s on
-    a modern laptop). Use a coarser PySR run (`niters=10`, `populations=15`)
-    when this loss is enabled.
 
-    The base (n_s, r) terms still come from the slow-roll closed-form kernel
-    so the slow part of the loss only kicks in for the GW-specific targets.
+def chi2_relic_gw_with_breakdown(
+    model: "EGBModel",
+    *,
+    target_ns: float,
+    sigma_ns: float = 0.003,
+    target_r: float = 0.0,
+    sigma_r: float = 0.018,
+    omega_gw_targets: list[tuple[float, float, float]] | None = None,
+    omega_gw_band_min: tuple[float, float, float] | None = None,
+    N_pivot: float = 55.0,
+    T_reh_GeV: float | None = 1.0e15,
+    target_lnAs: float | None = None,
+    sigma_lnAs: float = 0.014,
+    phi_range: tuple[float, float] = (-15.0, 15.0),
+    invalid_penalty: float = 1.0e8,
+) -> "Chi2Breakdown":
+    """Atomized χ² for full MS + relic-GW pipeline.
+
+    Returns Chi2Breakdown with per-component contributions:
+
+      * "n_s", "r", "lnAs"               — slow-roll closed-form
+      * "omega_gw@<freq>Hz"              — per pointwise target
+      * "omega_gw_band_<f_lo>_<f_hi>"    — band-floor deficit
+      * "background_failure"              — soft penalty if MS pipeline
+                                            couldn't run
+
+    `reasons` carries human-readable diagnoses, e.g. "Ω_GW @ 1mHz is
+    4 decades above target — model is too loud, weaken ξ".
     """
-    # local imports to avoid circular dependency at module load time
-    from .egb_background import integrate_with_pivot
-    from .egb_modes import k_pivot_from_traj, tensor_power_spectrum
+    from .diagnostics import (
+        Chi2Breakdown,
+        chi2_full_breakdown,
+        chi2_omega_gw_breakdown,
+        soft_invalid_penalty,
+    )
+    from .egb_modes import tensor_power_spectrum
     from .relic_gw import (
         OMEGA_R_H2,
         k_inflation_to_today_Mpc_inv,
-        k_today_Mpc_inv_to_freq_Hz,
         transfer_function_sq,
     )
 
-    # Step 1: standard observables from the closed-form kernel
+    # Step 1: closed-form (n_s, r, A_s) breakdown
     obs = compute_observables_full(model, N_pivot=N_pivot, phi_range=phi_range)
     if not obs.is_valid:
-        return invalid_penalty
-    chi2 = ((obs.n_s - target_ns) / sigma_ns) ** 2
-    chi2 += ((obs.r - target_r) / sigma_r) ** 2
-    if target_lnAs is not None and obs.P_S > 0:
-        ln10As = np.log(1e10 * obs.P_S)
-        chi2 += ((ln10As - target_lnAs) / sigma_lnAs) ** 2
+        soft, reasons = soft_invalid_penalty(model, phi_range=phi_range)
+        return Chi2Breakdown(total=soft, components={}, reasons=reasons,
+                             is_valid=False, soft_penalty=soft)
+    sr_bd = chi2_full_breakdown(
+        obs,
+        target_ns=target_ns, sigma_ns=sigma_ns,
+        target_r=target_r, sigma_r=sigma_r,
+        target_lnAs=target_lnAs, sigma_lnAs=sigma_lnAs,
+    )
+    components: dict[str, float] = dict(sr_bd.components)
+    reasons: list[str] = list(sr_bd.reasons)
 
     if not omega_gw_targets and not omega_gw_band_min:
-        return float(chi2)
+        total = float(sum(components.values()))
+        return Chi2Breakdown(total=total, components=components,
+                             reasons=reasons, is_valid=True)
 
-    # Step 2: full background + MS for each target frequency.
-    # Use the inflationary half-range from obs.phi_end to extend φ-bracket.
-    if np.isfinite(obs.phi_end):
-        # bracket from φ_end towards the inflationary side, ample buffer
-        delta = max(20.0, abs(obs.phi_N - obs.phi_end) * 5.0)
-        if obs.phi_N > obs.phi_end:
-            traj_range = (obs.phi_end - 1.0, obs.phi_end + delta)
-        else:
-            traj_range = (obs.phi_end - delta, obs.phi_end + 1.0)
-    else:
-        traj_range = phi_range
-    traj = integrate_with_pivot(model, N_pivot=N_pivot, phi_range=traj_range)
+    # Step 2: robust background integration
+    traj, log = integrate_background_robust(model, N_pivot=N_pivot,
+                                             phi_range=phi_range, obs=obs)
     if traj is None:
-        return invalid_penalty
+        components["background_failure"] = invalid_penalty * 1.0e-3
+        reasons.append(
+            "Full background ODE failed across the entire fallback ladder. "
+            "Diagnosis steps: " + " → ".join(log) + ". "
+            "Common causes: (i) ξ(φ) makes Q change sign across the "
+            "trajectory, (ii) the GB term makes the Friedmann constraint "
+            "have no real positive H², (iii) ε develops a sharp feature "
+            "(e.g. inflection point) that solve_ivp can't resolve at the "
+            "default tolerances."
+        )
+        total = float(sum(components.values()))
+        return Chi2Breakdown(total=total, components=components,
+                             reasons=reasons, is_valid=True)
+
+    # Step 3: MS for each target frequency
     pivot_idx = int(np.argmin(np.abs(traj.N - (traj.N_end - N_pivot))))
     H_pivot = float(traj.H[pivot_idx])
     a_pivot = float(traj.a[pivot_idx])
     k_pivot_inflation = float(a_pivot * H_pivot)
-    # k_inflation = (k_today_Mpc) × (k_pivot_inflation / 0.05)
-    # f_Hz = 0.65e-15 × k_today_Mpc  ⇒  k_today_Mpc = f_Hz / 0.65e-15
     inflation_per_today = k_pivot_inflation / 0.05
 
-    # Pointwise targets
     if omega_gw_targets:
-        ks_inflation: list[float] = []
-        for f_Hz, _, _ in omega_gw_targets:
-            k_today_Mpc = f_Hz / 0.65e-15
-            ks_inflation.append(k_today_Mpc * inflation_per_today)
+        ks_inflation = [(f / 0.65e-15) * inflation_per_today
+                        for f, _, _ in omega_gw_targets]
         k_arr = np.array(ks_inflation)
-        P_T_arr, _ = tensor_power_spectrum(model, k_arr, traj=traj, N_pivot=N_pivot)
+        P_T_arr, mode_results = tensor_power_spectrum(
+            model, k_arr, traj=traj, N_pivot=N_pivot)
         k_today_arr = k_inflation_to_today_Mpc_inv(
-            k_arr, H_pivot=H_pivot, a_pivot=a_pivot,
-        )
+            k_arr, H_pivot=H_pivot, a_pivot=a_pivot)
         Tin_arr = (np.full_like(k_today_arr, T_reh_GeV)
                    if T_reh_GeV is not None else None)
         T_sq = transfer_function_sq(k_today_arr, T_in_GeV=Tin_arr)
         Omega_arr = (OMEGA_R_H2 / 24.0) * P_T_arr * T_sq
-        for (f_Hz, target, sigma), Om in zip(omega_gw_targets, Omega_arr):
-            if not np.isfinite(Om) or Om <= 0:
-                chi2 += invalid_penalty * 1.0e-3
-                continue
-            # χ² in log-space: log Ω is what we typically care about
-            chi2 += (
-                (np.log10(max(Om, 1e-30)) - np.log10(max(target, 1e-30)))
-                / max(sigma / max(target, 1e-30) / np.log(10), 0.05)
-            ) ** 2
 
-    # Band minimum target
+        omega_at_f = {tgt[0]: float(Om) for tgt, Om in zip(
+            omega_gw_targets, Omega_arr)}
+        gw_bd = chi2_omega_gw_breakdown(
+            omega_gw_targets, omega_gw_values=omega_at_f)
+        components.update(gw_bd.components)
+        reasons.extend(gw_bd.reasons)
+
     if omega_gw_band_min is not None:
         f_lo, f_hi, target_min = omega_gw_band_min
-        # 16 sample points across the band
         f_pts = np.logspace(np.log10(f_lo), np.log10(f_hi), 16)
         ks_inflation = [(f / 0.65e-15) * inflation_per_today for f in f_pts]
         k_arr = np.array(ks_inflation)
-        P_T_arr, _ = tensor_power_spectrum(model, k_arr, traj=traj, N_pivot=N_pivot)
+        P_T_arr, _ = tensor_power_spectrum(model, k_arr, traj=traj,
+                                            N_pivot=N_pivot)
         k_today_arr = k_inflation_to_today_Mpc_inv(
-            k_arr, H_pivot=H_pivot, a_pivot=a_pivot,
-        )
+            k_arr, H_pivot=H_pivot, a_pivot=a_pivot)
         Tin_arr = (np.full_like(k_today_arr, T_reh_GeV)
                    if T_reh_GeV is not None else None)
         T_sq = transfer_function_sq(k_today_arr, T_in_GeV=Tin_arr)
         Omega_arr = (OMEGA_R_H2 / 24.0) * P_T_arr * T_sq
-        # Penalise being below target_min:
         deficits = np.maximum(0.0, np.log10(max(target_min, 1e-30))
                               - np.log10(np.maximum(Omega_arr, 1e-30)))
-        chi2 += float(np.sum(deficits ** 2))
+        band_chi2 = float(np.sum(deficits ** 2))
+        key = f"omega_gw_band_{f_lo:.0e}_{f_hi:.0e}"
+        components[key] = band_chi2
+        if band_chi2 > 100:
+            min_omega = float(np.nanmin(Omega_arr))
+            reasons.append(f"Band-floor deficit: minimum Ω_GW in [{f_lo:.0e},"
+                           f" {f_hi:.0e}] Hz is {min_omega:.2e}, target≥"
+                           f"{target_min:.2e} ⇒ raise V_pivot or sharpen "
+                           "ξ(φ) near horizon exit.")
 
-    return float(chi2)
+    total = float(sum(components.values()))
+    return Chi2Breakdown(total=total, components=components,
+                         reasons=reasons, is_valid=True)

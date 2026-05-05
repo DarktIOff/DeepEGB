@@ -89,6 +89,19 @@ relic_gw_spectrum_tool(V_expr, xi_expr, N=55, T_reh_GeV=1e15, …)
     the user asks about LISA / DECIGO / PTA / ET / CMB-pol detectability,
     or the relic-GW signature of an EGB model.
 
+diagnose_egb_model_tool(V_expr, xi_expr, N=55, target_ns=..., target_r=...)
+    Use this BEFORE giving up on a model that produced NaN observables,
+    a huge χ² (> 1e3), or a "background_failure" message. Returns:
+      • whether φ_end / φ_pivot were found,
+      • soft_penalty + the qualitative reasons,
+      • atomized χ² breakdown (per-component contributions),
+      • dominant_chi2 (top 3 components driving the loss),
+      • concrete suggestions for fixing V or ξ.
+    The "components" dict tells you EXACTLY which term is killing the
+    fit — e.g. omega_gw@1mHz=5012 means the GW amplitude is 5 decades
+    above target.  Don't say "search collapsed" without first running
+    this and reporting the dominant component.
+
 retrieve_literature_tool(query, k=5)
     LOCAL RAG: searches the user's papers/ folder (PDF / TeX / HTML / MD)
     and returns hybrid (FAISS + BM25) hits with file path + section title.
@@ -180,6 +193,21 @@ ERROR HANDLING (CRITICAL)
 • If a tool returns an "error" field starting with "TOOL_ERROR:", DO NOT
   retry the same call with the same arguments. The "do_not_retry": true
   flag means the configuration itself is broken.
+• If a search returns ALL χ² ≈ 1e6 (the soft-invalid floor) or relic_gw
+  reports "background_failure" → do NOT just give up.  Run
+  diagnose_egb_model_tool on a representative candidate first. Report
+  back: which component dominates, what the soft_penalty reasons say,
+  what the suggestions are. Then propose a concrete fix and try again.
+• Examples of acting on the breakdown:
+    - dominant component = "omega_gw@1mHz" with contribution > 1e3
+       → the model is too loud at LISA. Tell the user; reduce ξ
+         amplitude or weaken the V slope at horizon crossing.
+    - dominant component = "n_s" with contribution > 1e3
+       → spectral tilt is way off. Try a different V family.
+    - reasons include "ε > 1 everywhere"
+       → no slow-roll. Pick a flatter V (Starobinsky, hilltop).
+    - reasons include "V(φ) ≤ 0 over X% of φ-range"
+       → restrict the φ-range or add a positive shift to V.
 • On TOOL_ERROR from search_egb_potentials, fall back as follows:
     1. State plainly to the user that search failed (paste the message
        and the tool's "suggestion" field).

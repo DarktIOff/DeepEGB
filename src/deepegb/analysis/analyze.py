@@ -16,6 +16,8 @@ import numpy as np
 
 from ..physics import (
     compute_observables_full,
+    diagnose_model,
+    integrate_background_robust,
     integrate_with_pivot,
     k_inflation_to_today_Mpc_inv,
     k_pivot_from_traj,
@@ -82,10 +84,21 @@ def analyze_egb_relic_gw(
     f_today (Hz).
     """
     model = expressions_to_model(V_expr, xi_expr)
-    traj = integrate_with_pivot(model, N_pivot=N, phi_range=phi_range)
+    obs = compute_observables_full(model, N_pivot=N, phi_range=phi_range)
+    traj, ladder_log = integrate_background_robust(
+        model, N_pivot=N, phi_range=phi_range,
+        obs=obs if obs.is_valid else None,
+    )
     if traj is None:
-        return {"V_expr": V_expr, "xi_expr": xi_expr, "valid": False,
-                "error": "background integration failed"}
+        diag = diagnose_model(model, N_pivot=N, phi_range=phi_range)
+        return {
+            "V_expr": V_expr, "xi_expr": xi_expr, "valid": False,
+            "error": "background integration failed across the full retry "
+                     "ladder (see `ladder_log` and `diagnosis` for the "
+                     "actionable reason)",
+            "ladder_log": ladder_log,
+            "diagnosis": diag,
+        }
     k_pivot = k_pivot_from_traj(traj, N_pivot=N)
     k_arr = k_pivot * np.logspace(-n_decades / 2, n_decades / 2, n_k)
     spec = relic_gw_spectrum(model, k_arr, traj=traj, N_pivot=N, T_reh_GeV=T_reh_GeV)

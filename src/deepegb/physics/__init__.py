@@ -17,11 +17,21 @@ from .egb_perturbations import (
     background_at,
     background_along,
     chi2_full,
+    chi2_full_with_breakdown,
     chi2_relic_gw,
+    chi2_relic_gw_with_breakdown,
     compute_c_S2,
     compute_c_T2,
     compute_observables_full,
+    integrate_background_robust,
     power_spectra_at,
+)
+from .diagnostics import (
+    Chi2Breakdown,
+    chi2_full_breakdown,
+    chi2_omega_gw_breakdown,
+    diagnose_model,
+    soft_invalid_penalty,
 )
 from .egb_background import (
     BackgroundTrajectory,
@@ -57,11 +67,20 @@ __all__ = [
     "background_at",
     "background_along",
     "chi2_full",
+    "chi2_full_with_breakdown",
     "chi2_relic_gw",
+    "chi2_relic_gw_with_breakdown",
     "compute_c_S2",
     "compute_c_T2",
     "compute_observables_full",
+    "integrate_background_robust",
     "power_spectra_at",
+    # Diagnostics
+    "Chi2Breakdown",
+    "chi2_full_breakdown",
+    "chi2_omega_gw_breakdown",
+    "diagnose_model",
+    "soft_invalid_penalty",
     # Full background EOM integration
     "BackgroundTrajectory",
     "integrate_background",

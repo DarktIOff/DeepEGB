@@ -191,6 +191,7 @@ def chi2_for_expressions(
             target_alphas=cfg.target_alphas, sigma_alphas=cfg.sigma_alphas,
             target_nT=cfg.target_nT, sigma_nT=cfg.sigma_nT,
             target_cT2=cfg.target_cT2, sigma_cT2=cfg.sigma_cT2,
+            model=model,    # enables soft-invalid penalty for NaN cases
         )
     except Exception:
         return 1.0e6
@@ -290,13 +291,19 @@ def run_joint_search(
     log = progress_cb or (lambda s: None)
     t0 = time.time()
 
-    # We use a synthetic "regression target" that biases PySR toward smooth,
-    # bounded functions in φ. The true ranking is by EGB-physics χ².
-    rng = np.random.default_rng(0)
+    # PySR fits an MSE objective on a "seed" target. We don't actually
+    # care about the regression — the true ranking is by EGB-physics χ²
+    # in `chi2_for_expressions`. But the seed shouldn't be 0 everywhere,
+    # or PySR converges to V≈const≈0, which then makes the EGB kernel
+    # produce NaN observables and the search collapses to a flat χ²
+    # landscape (the bug the user reported).
+    #
+    # We use a Starobinsky-like target that produces ~O(1) values across
+    # the φ-range. PySR's evolutionary search uses this only to seed
+    # diversity; we re-rank by physics χ² afterwards.
     phi = np.linspace(*cfg.phi_sample_range, cfg.n_samples)
     X = phi.reshape(-1, 1)
-    # A gentle plateau-like target gets the search going; not load-bearing.
-    y_seed = np.tanh(0.3 * phi) ** 2 * 1e-10
+    y_seed = (1.0 - np.exp(-np.sqrt(2.0 / 3.0) * np.abs(phi))) ** 2 + 1e-3
 
     # ---- Pass 1: search for V with ξ ≡ 0 ----
     log("[1/2] PySR search for V(φ) with ξ ≡ 0 …")

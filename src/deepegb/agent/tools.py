@@ -199,6 +199,62 @@ def relic_gw_spectrum_tool(
         )
 
 
+def diagnose_egb_model_tool(
+    V_expr: str,
+    xi_expr: str = "0",
+    *,
+    N: float = 55.0,
+    target_ns: float = 0.965,
+    target_r: float = 0.0,
+    sigma_ns: float = 0.005,
+    sigma_r: float = 0.018,
+) -> str:
+    """Diagnose WHY an EGB inflation model is failing or producing odd
+    observables. Returns a structured report with:
+
+      * Whether φ_end / φ_pivot were found.
+      * Soft penalty value and qualitative reasons.
+      * Atomized χ² breakdown (per-component contributions).
+      * Concrete suggestions for how to fix the model.
+
+    Use this whenever a previous tool call returned NaN observables, a
+    huge χ², or a "background_failure" message. The breakdown will tell
+    you which TERM (n_s, r, A_s, Ω_GW@1mHz, etc.) is dominating, so you
+    can adjust the offending part of V or ξ instead of giving up.
+
+    Parameters
+    ----------
+    V_expr, xi_expr : Sympy strings in `phi`. Pass "0" for ξ to test GR.
+    N               : Pivot e-folds before end of inflation.
+    target_ns/r, sigma_ns/r : χ² targets to score against.
+    """
+    from ..physics import diagnose_model, chi2_full_with_breakdown
+    from ..search.pysr_search import expressions_to_model
+    try:
+        model = expressions_to_model(V_expr, xi_expr)
+    except Exception as exc:
+        return _tool_error("expression_parse",
+                           f"Could not parse V/ξ: {exc}",
+                           suggestion="Use Sympy syntax with `phi` as the field.")
+    diag = diagnose_model(model, N_pivot=N)
+    obs = None
+    if diag.get("observables_valid"):
+        from ..physics import compute_observables_full
+        obs = compute_observables_full(model, N_pivot=N)
+        bd = chi2_full_with_breakdown(
+            obs, target_ns=target_ns, sigma_ns=sigma_ns,
+            target_r=target_r, sigma_r=sigma_r, model=model,
+        )
+        diag["chi2_breakdown"] = bd.as_dict()
+        # Top contributors
+        top = bd.dominant_components(3)
+        if top:
+            diag["dominant_chi2"] = [
+                {"component": k, "contribution": v} for k, v in top
+            ]
+    return json.dumps(diag, indent=2, default=str)
+
+
 def retrieve_literature_tool(query: str, k: int = 5) -> str:
     """Search the local RAG index for chunks of EGB-inflation literature
     relevant to a natural-language query. Returns formatted hits with
@@ -240,6 +296,7 @@ def all_tools(include_rag: bool = True) -> list:
         analyze_egb_model_tool,
         plot_egb_model_tool,
         relic_gw_spectrum_tool,
+        diagnose_egb_model_tool,
     ]
     if include_rag:
         tools.append(retrieve_literature_tool)
