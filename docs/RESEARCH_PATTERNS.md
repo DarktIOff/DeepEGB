@@ -144,6 +144,47 @@ research-grade output.
 
 ---
 
+## The GR-limit ban
+
+**`ξ(φ) = 0` is not an EGB inflation model.** The action
+
+$$
+S = \int d^4x \sqrt{-g}\left[\tfrac{R}{2} - \tfrac{1}{2}(\partial\phi)^2
+                              - V(\phi) - \tfrac{1}{2}\xi(\phi)\,\mathcal G\right]
+$$
+
+reduces to plain General Relativity in the limit $\xi \to 0$ — every EGB
+signature ($c_T^2 \neq 1$, broken consistency relation, modified $r$,
+relic-GW spectral features) vanishes with it. DeepEGB enforces this at
+three layers:
+
+1. **In the χ² loss.** `chi2_full_breakdown` adds an `egb_penalty`
+   component $\sim 10^3 e^{-|\delta_1|/\tau}$ with $\tau =$ `egb_min_delta1`
+   (default $10^{-4}$). Models with $|\delta_1(\phi_N)| < \tau$ pay a
+   penalty that dominates any small-χ² fit.
+
+2. **In the SR pipeline.** `run_joint_search` no longer includes `"0"` as
+   a candidate ξ in its second pass when `enforce_egb=True` (the default).
+   The user has to opt in via `--allow-gr` or `enforce_egb=False`.
+
+3. **In the diagnose tool.** `diagnose_egb_model_tool` reports
+   `"is_gr_limit": true` whenever $|\delta_1| < 10^{-8}$ at the pivot.
+   The agent's prompt explicitly tells it never to present such models
+   as "discovered EGB candidates".
+
+To opt out — e.g. for a controlled comparison run that should include
+the GR baseline as a reference point — pass:
+
+```bash
+deepegb search --ns 0.974 --r 0.0 --N 55 --allow-gr ...
+```
+
+or in the agent:
+
+```
+search_egb_potentials(target_ns=..., target_r=..., enforce_egb=False)
+```
+
 ## Anti-patterns (call out and reject)
 
 * **"I think the answer is..."** — production tools exist; if a question

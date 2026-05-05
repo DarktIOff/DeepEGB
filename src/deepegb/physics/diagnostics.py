@@ -160,8 +160,23 @@ def chi2_full_breakdown(
     sigma_nT: float = 0.1,
     target_cT2: float | None = None,
     sigma_cT2: float = 0.05,
+    enforce_egb: bool = True,
+    egb_min_delta1: float = 1.0e-4,
 ) -> Chi2Breakdown:
-    """χ² breakdown for slow-roll closed-form observables (FullObservables)."""
+    """χ² breakdown for slow-roll closed-form observables (FullObservables).
+
+    EGB-sector enforcement
+    ----------------------
+    By default (`enforce_egb=True`) we penalise candidates whose GB
+    coupling vanishes at horizon crossing — i.e. |δ₁(φ_N)| < `egb_min_delta1`.
+    Such candidates are formally GR with ξ ≡ 0 (or numerically negligible),
+    not EGB inflation models.  The penalty is `egb_penalty = G·exp(-|δ₁|/τ)`
+    with G chosen large enough to dominate small slow-roll χ² but smooth
+    enough that the search retains a gradient to escape the GR limit.
+
+    Pass `enforce_egb=False` if you explicitly want the GR baseline as
+    a member of the search (e.g. for a controlled comparison).
+    """
     if obs is None or not getattr(obs, "is_valid", False):
         return Chi2Breakdown(
             total=np.inf,
@@ -184,7 +199,6 @@ def chi2_full_breakdown(
     if target_cT2 is not None and np.isfinite(obs.c_T2):
         components["c_T2"] = ((obs.c_T2 - target_cT2) / sigma_cT2) ** 2
 
-    total = float(sum(components.values()))
     reasons: list[str] = []
     if abs(obs.epsilon) > 0.05:
         reasons.append(f"|ε|={abs(obs.epsilon):.3g} > 0.05 — slow-roll "
@@ -193,6 +207,26 @@ def chi2_full_breakdown(
     if components.get("c_T2", 0) > 9:
         reasons.append("c_T² is far from the GW170817 constraint (|c_T-1|<10⁻¹⁵ "
                        "today) — viable only if ξ̇ → 0 between inflation and now.")
+
+    # GR-limit rejection: ξ → 0 makes the model pure GR. Penalise smoothly
+    # so PySR is pushed out of that basin but doesn't see a hard wall.
+    if enforce_egb and np.isfinite(obs.delta1):
+        d1 = abs(float(obs.delta1))
+        # Smooth bump: vanishes for d1 >> τ, rises to ~G near d1=0.
+        gain = 1.0e3
+        egb_penalty = gain * np.exp(-d1 / max(egb_min_delta1, 1e-30))
+        if egb_penalty > 1e-3:
+            components["egb_penalty"] = float(egb_penalty)
+        if d1 < egb_min_delta1:
+            reasons.append(
+                f"|δ₁(φ_N)|={d1:.2e} < threshold {egb_min_delta1:.0e} "
+                f"⇒ model is essentially GR (ξ inactive at horizon "
+                "crossing).  Rejected as a genuine EGB candidate. "
+                "Make ξ_,φ steeper, or move ξ to act around horizon "
+                "exit rather than at the basin."
+            )
+
+    total = float(sum(components.values()))
     return Chi2Breakdown(
         total=total, components=components, reasons=reasons,
         is_valid=True, soft_penalty=0.0,
@@ -302,6 +336,24 @@ def diagnose_model(
             pass
 
     suggestions: list[str] = []
+    # Detect the GR limit: |δ₁| at horizon crossing ~ 0
+    is_gr_limit = False
+    if obs is not None and obs.is_valid and np.isfinite(obs.delta1):
+        if abs(float(obs.delta1)) < 1.0e-8:
+            is_gr_limit = True
+            reasons.append(
+                f"GR LIMIT: |δ₁(φ_N)|={abs(obs.delta1):.2e} ≈ 0. ξ(φ) is "
+                "either identically zero or numerically negligible at "
+                "horizon crossing — this is plain General Relativity, not "
+                "EGB inflation. DeepEGB rejects ξ ≡ 0 as a candidate."
+            )
+            suggestions.append(
+                "Use a non-trivial ξ(φ) whose derivative ξ_,φ is nonzero "
+                "around φ_N. Examples: ξ = α·exp(−λφ), ξ = α/(φ²+β), "
+                "ξ = α·φⁿ. Make sure ξ_,φ × V² is comparable to V_,φ at "
+                "the pivot so δ₁ = −(4/3)ξ_,φ Q is non-negligible."
+            )
+
     if phi_end is None:
         suggestions.append("Adjust V or ξ so ε crosses 1 in the φ-range. "
                            "Concrete: increase the slope of V near the basin, "
@@ -351,5 +403,6 @@ def diagnose_model(
                        if np.isfinite(bg["delta1"]).any() else np.nan),
         "observables": obs.as_dict() if obs is not None else None,
         "observables_valid": obs is not None and obs.is_valid,
+        "is_gr_limit": is_gr_limit,
         "suggestions": suggestions,
     }

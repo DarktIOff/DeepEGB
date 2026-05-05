@@ -62,11 +62,18 @@ def main() -> None:
 @click.option("--T-reh", "T_reh_GeV", default=1.0e15, type=float,
               help="Reheating temperature in GeV (only matters for the "
                    "transfer-function g_* factor in `production_gw`).")
+@click.option("--allow-gr", is_flag=True, default=False,
+              help="Allow ξ ≡ 0 candidates (the GR limit) in the search. "
+                   "Default: rejected — we want EGB models, not vanilla GR.")
+@click.option("--egb-min-delta1", default=1.0e-4, type=float, show_default=True,
+              help="Threshold below which |δ₁(φ_pivot)| triggers the GR-limit "
+                   "rejection penalty.")
 @click.option("--out", "out_dir", default="runs", type=click.Path())
 def search(target_ns, sigma_ns, target_r, sigma_r,
            target_lnAs, target_alphas, target_nT, target_cT2,
            N_pivot, niterations, populations, maxsize, top,
            loss_kind, gw_targets, gw_band_min, T_reh_GeV,
+           allow_gr, egb_min_delta1,
            out_dir):
     """Run a joint symbolic-regression search for V(φ) and ξ(φ)."""
     from rich.console import Console
@@ -108,6 +115,8 @@ def search(target_ns, sigma_ns, target_r, sigma_r,
         omega_gw_targets=tuple(gw_target_tuples),
         omega_gw_band_min=band_min,
         T_reh_GeV=T_reh_GeV,
+        enforce_egb=not allow_gr,
+        egb_min_delta1=egb_min_delta1,
         runs_dir=out_dir,
     )
 

@@ -151,21 +151,44 @@ def test_layer_7_sensitivity_curve_has_reasonable_values():
 def test_layer_8_chi2_full_perfect_fit_low(gr_traj):
     model, _ = gr_traj
     obs = compute_observables_full(model, N_pivot=55.0, phi_range=(0.1, 8.0))
+    # GR Starobinsky has δ₁=0 ⇒ enforce_egb adds +1000 penalty by design.
+    # Disable it here: this test is about the (n_s, r) part of the χ²
+    # converging to ~0 on a perfect fit, not about the GR-limit guard.
     chi2 = chi2_full(obs, target_ns=obs.n_s, sigma_ns=0.01,
-                     target_r=obs.r, sigma_r=0.005)
+                     target_r=obs.r, sigma_r=0.005,
+                     enforce_egb=False)
     assert chi2 < 1.0e-6      # exact match
 
 
 def test_layer_8_chi2_full_n_s_shift_quadratic(gr_traj):
     model, _ = gr_traj
     obs = compute_observables_full(model, N_pivot=55.0, phi_range=(0.1, 8.0))
+    # As above: disable enforce_egb so the GR-limit penalty doesn't add 1000.
     chi2_a = chi2_full(obs, target_ns=obs.n_s + 0.01, sigma_ns=0.01,
-                        target_r=obs.r, sigma_r=0.05)
+                        target_r=obs.r, sigma_r=0.05, enforce_egb=False)
     chi2_b = chi2_full(obs, target_ns=obs.n_s + 0.02, sigma_ns=0.01,
-                        target_r=obs.r, sigma_r=0.05)
+                        target_r=obs.r, sigma_r=0.05, enforce_egb=False)
     # χ² should be ~1 for 1σ shift, ~4 for 2σ shift
     assert 0.8 < chi2_a < 1.5
     assert 3.0 < chi2_b < 5.0
+
+
+def test_layer_8_GR_limit_is_rejected_by_default():
+    """A pure-GR Starobinsky model should attract the GR-limit penalty."""
+    model = EGBModel(
+        V=lambda p: 1e-10 * (1.0 - np.exp(-np.sqrt(2 / 3) * p)) ** 2,
+        xi=lambda p: 0.0 * p,
+    )
+    obs = compute_observables_full(model, N_pivot=55.0, phi_range=(0.1, 8.0))
+    chi2_with    = chi2_full(obs, target_ns=obs.n_s, sigma_ns=0.01,
+                             target_r=obs.r, sigma_r=0.005,
+                             enforce_egb=True)
+    chi2_without = chi2_full(obs, target_ns=obs.n_s, sigma_ns=0.01,
+                             target_r=obs.r, sigma_r=0.005,
+                             enforce_egb=False)
+    # The penalty should add ~1000
+    assert chi2_with - chi2_without > 100, (chi2_with, chi2_without)
+    assert chi2_without < 1.0e-6
 
 
 def test_layer_8_chi2_relic_gw_with_LISA_target(gr_traj):

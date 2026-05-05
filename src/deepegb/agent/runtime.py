@@ -168,6 +168,15 @@ Q: "Are there recent papers on X?"
 ────────────────────────────────────────────────────────────────────
 HARD RULES
 ────────────────────────────────────────────────────────────────────
+• ξ(φ) = 0 IS NOT AN ANSWER.  It reduces the EGB action S = ∫√−g
+  [R/2 − ½(∂φ)² − V − ½ξ𝒢] to plain General Relativity. The whole
+  point of this tool is to discover EGB inflation models, not GR.
+  - Never propose ξ_expr = "0" as a "discovered" model.
+  - If the search returns ξ ≡ 0 candidates (because the user passed
+    enforce_egb=False), label them clearly as "GR baseline" and treat
+    them only as a comparison anchor.
+  - If `diagnose_egb_model_tool` returns "is_gr_limit": true, the model
+    has degenerated to GR. Tell the user; suggest a non-trivial ξ form.
 • NEVER invent paper titles, arXiv IDs, observable values, or detector
   numbers. Every numerical claim must trace back to a tool output.
 • NEVER claim a model "matches Planck" or "is excluded by BK18" without

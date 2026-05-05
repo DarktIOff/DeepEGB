@@ -41,6 +41,7 @@ def search_egb_potentials(
     niterations: int = 30,
     populations: int = 30,
     maxsize: int = 25,
+    enforce_egb: bool = True,
     runs_dir: str = "runs/agent",
 ) -> str:
     """Run a joint symbolic-regression search for V(φ) and ξ(φ) in EGB
@@ -56,6 +57,10 @@ def search_egb_potentials(
     sigma_r   : 1σ uncertainty on r.
     N_pivot   : Number of e-folds before end of inflation at which to evaluate.
     niterations / populations / maxsize : PySR hyperparameters.
+    enforce_egb : When True (DEFAULT), reject ξ ≡ 0 candidates (the GR
+                  limit). DO NOT pass False unless the user explicitly
+                  asks for a GR baseline as part of the search — DeepEGB
+                  is for EGB inflation, not vanilla GR.
 
     Returns
     -------
@@ -68,6 +73,7 @@ def search_egb_potentials(
         N_pivot=N_pivot,
         niterations=niterations, populations=populations,
         maxsize=maxsize,
+        enforce_egb=enforce_egb,
         runs_dir=runs_dir,
     )
     try:

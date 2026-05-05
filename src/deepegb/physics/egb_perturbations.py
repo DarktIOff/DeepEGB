@@ -453,6 +453,8 @@ def chi2_full(
     sigma_cT2: float = 0.05,             # not during inflation; usually skip.
     invalid_penalty: float = 1.0e6,      # legacy fallback for is_valid=False
     model: "EGBModel | None" = None,     # NEW: enables soft penalty
+    enforce_egb: bool = True,            # NEW: reject ξ → 0 GR limit
+    egb_min_delta1: float = 1.0e-4,
 ) -> float:
     """Generalised χ² in the (n_s, r, [optional A_s, α_s, n_T, c_T²]) plane.
 
@@ -468,6 +470,7 @@ def chi2_full(
         target_nT=target_nT, sigma_nT=sigma_nT,
         target_cT2=target_cT2, sigma_cT2=sigma_cT2,
         invalid_penalty=invalid_penalty, model=model,
+        enforce_egb=enforce_egb, egb_min_delta1=egb_min_delta1,
     )
     return bd.total
 
@@ -489,6 +492,8 @@ def chi2_full_with_breakdown(
     sigma_cT2: float = 0.05,
     invalid_penalty: float = 1.0e6,
     model: "EGBModel | None" = None,
+    enforce_egb: bool = True,
+    egb_min_delta1: float = 1.0e-4,
 ) -> "Chi2Breakdown":
     """Atomized χ² with reasons. The agent tools surface this dict so the
     LLM can see exactly which component is dominating the loss.
@@ -500,8 +505,6 @@ def chi2_full_with_breakdown(
     )
 
     if obs is None or not obs.is_valid:
-        # Soft penalty: even if observables can't be computed, give PySR
-        # a gradient by penalising HOW invalid the model is.
         if model is not None:
             soft, reasons = soft_invalid_penalty(model)
         else:
@@ -520,6 +523,7 @@ def chi2_full_with_breakdown(
         target_alphas=target_alphas, sigma_alphas=sigma_alphas,
         target_nT=target_nT, sigma_nT=sigma_nT,
         target_cT2=target_cT2, sigma_cT2=sigma_cT2,
+        enforce_egb=enforce_egb, egb_min_delta1=egb_min_delta1,
     )
 
 
@@ -606,6 +610,8 @@ def chi2_relic_gw(
     sigma_lnAs: float = 0.014,
     phi_range: tuple[float, float] = (-15.0, 15.0),
     invalid_penalty: float = 1.0e8,
+    enforce_egb: bool = True,
+    egb_min_delta1: float = 1.0e-4,
 ) -> float:
     """Scalar χ² with full Mukhanov-Sasaki + relic-GW pipeline. Use
     `chi2_relic_gw_with_breakdown` to get the per-component dict."""
@@ -617,6 +623,7 @@ def chi2_relic_gw(
         N_pivot=N_pivot, T_reh_GeV=T_reh_GeV,
         target_lnAs=target_lnAs, sigma_lnAs=sigma_lnAs,
         phi_range=phi_range, invalid_penalty=invalid_penalty,
+        enforce_egb=enforce_egb, egb_min_delta1=egb_min_delta1,
     )
     return bd.total
 
@@ -636,6 +643,8 @@ def chi2_relic_gw_with_breakdown(
     sigma_lnAs: float = 0.014,
     phi_range: tuple[float, float] = (-15.0, 15.0),
     invalid_penalty: float = 1.0e8,
+    enforce_egb: bool = True,
+    egb_min_delta1: float = 1.0e-4,
 ) -> "Chi2Breakdown":
     """Atomized χ² for full MS + relic-GW pipeline.
 
@@ -674,6 +683,7 @@ def chi2_relic_gw_with_breakdown(
         target_ns=target_ns, sigma_ns=sigma_ns,
         target_r=target_r, sigma_r=sigma_r,
         target_lnAs=target_lnAs, sigma_lnAs=sigma_lnAs,
+        enforce_egb=enforce_egb, egb_min_delta1=egb_min_delta1,
     )
     components: dict[str, float] = dict(sr_bd.components)
     reasons: list[str] = list(sr_bd.reasons)

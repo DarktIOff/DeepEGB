@@ -340,6 +340,33 @@ to physical frequency by $f \approx 0.65\times 10^{-15}\,(k/\text{Mpc}^{-1})$ Hz
 References: Watanabe & Komatsu 2006 (astro-ph/0604176); Boyle & Steinhardt
 2008 (astro-ph/0512014); Kuroyanagi et al. 2015 (1407.4785).
 
+## 9.4 GR-limit rejection (search-time)
+
+The action reduces to plain GR when $\xi(\phi) \equiv 0$. Searching for EGB
+inflation models in a space that includes the GR limit defeats the
+purpose, so DeepEGB **rejects $\xi \to 0$ by default**.
+
+The enforcement is a smooth penalty added to `chi2_full_breakdown`:
+
+$$
+\chi^2_{\rm EGB} = G \cdot \exp\bigl(-|\delta_1(\phi_N)|/\tau\bigr),
+\qquad G = 10^3,\ \tau = 10^{-4}\ \text{(defaults)}.
+$$
+
+with $\delta_1 = 4 \dot\xi H/M_{\rm Pl}^2 |_{\phi_N}$. The penalty
+vanishes for models with non-trivial GB sector at horizon crossing
+$(|\delta_1| \gg \tau)$ and rises smoothly to $G$ as $|\delta_1| \to 0$,
+giving PySR a usable gradient out of the GR basin. Configurable per
+search via `SearchConfig.enforce_egb` (default `True`) and
+`SearchConfig.egb_min_delta1` (default $10^{-4}$); also exposed on the
+CLI as `--allow-gr` and `--egb-min-delta1`. The `diagnose_egb_model_tool`
+flags any model with $|\delta_1| < 10^{-8}$ as `"is_gr_limit": true`.
+
+In the symbolic-regression pipeline `run_joint_search` also drops the
+`ξ = 0` candidate from the second-pass shortlist when `enforce_egb=True`,
+so the GR baseline never enters the ranked output unless the user
+explicitly opts in.
+
 ## 10. Remaining limitations
 
 | Limitation | Magnitude | Where to fix |

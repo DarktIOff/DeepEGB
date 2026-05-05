@@ -79,6 +79,15 @@ class SearchConfig:
     omega_gw_band_min: tuple[float, float, float] | None = None
     T_reh_GeV: float | None = 1.0e15
 
+    # EGB-sector enforcement: ξ ≡ 0 reduces our action to plain GR, which
+    # is not what we're searching for. When True (default) we add a soft
+    # penalty for |δ₁(φ_pivot)| < `egb_min_delta1` to push the search away
+    # from the GR-limit basin, and we drop ξ=0 from the candidate list in
+    # the second SR pass. Pass `enforce_egb=False` to allow the GR
+    # baseline as a member of the search (e.g. for controlled comparison).
+    enforce_egb: bool = True
+    egb_min_delta1: float = 1.0e-4
+
     # PySR hyperparameters
     niterations: int = 40
     populations: int = 35
@@ -175,6 +184,8 @@ def chi2_for_expressions(
                 omega_gw_band_min=cfg.omega_gw_band_min,
                 N_pivot=cfg.N_pivot,
                 T_reh_GeV=cfg.T_reh_GeV,
+                enforce_egb=cfg.enforce_egb,
+                egb_min_delta1=cfg.egb_min_delta1,
             )
         # production (default): slow-roll closed-form with full perturbations
         obs_full = compute_observables_full(
@@ -192,6 +203,8 @@ def chi2_for_expressions(
             target_nT=cfg.target_nT, sigma_nT=cfg.sigma_nT,
             target_cT2=cfg.target_cT2, sigma_cT2=cfg.sigma_cT2,
             model=model,    # enables soft-invalid penalty for NaN cases
+            enforce_egb=cfg.enforce_egb,
+            egb_min_delta1=cfg.egb_min_delta1,
         )
     except Exception:
         return 1.0e6
@@ -326,7 +339,10 @@ def run_joint_search(
         pysr_xi = _make_pysr(cfg, kind=f"xi_v{v_idx}")
         pysr_xi.fit(X, y_seed * 0.5 + 1e-12)
         xi_candidates = _hall_of_fame_strings(pysr_xi, top_k=cfg.top_k_V)
-        xi_candidates = ["0", *xi_candidates]   # keep the GR baseline as a candidate
+        # Only include the ξ=0 GR baseline if the user explicitly opted in
+        # via cfg.enforce_egb=False. Otherwise the search rejects pure GR.
+        if not cfg.enforce_egb:
+            xi_candidates = ["0", *xi_candidates]
 
         for xi_str in xi_candidates:
             chi2 = chi2_for_expressions(V_str, xi_str, cfg)
