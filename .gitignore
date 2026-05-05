@@ -11,6 +11,7 @@ dist/
 .ruff_cache/
 .mypy_cache/
 .ipynb_checkpoints/
+papers/
 
 # PySR scratch
 hall_of_fame*.csv
