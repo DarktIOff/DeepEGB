@@ -23,19 +23,19 @@ def main() -> None:
 # search
 # ---------------------------------------------------------------------------
 @main.command()
-@click.option("--ns", "target_ns", default=0.974, type=float,
+@click.option("--ns", "target_ns", default=0.9752, type=float,
               help="Target scalar spectral index n_s.")
-@click.option("--ns-sigma", "sigma_ns", default=0.003, type=float)
-@click.option("--r", "target_r", default=0.0, type=float,
+@click.option("--ns-sigma", "sigma_ns", default=0.0030, type=float)
+@click.option("--r", "target_r", default=0.025, type=float,
               help="Target tensor-to-scalar ratio r.")
-@click.option("--r-sigma", "sigma_r", default=0.018, type=float)
+@click.option("--r-sigma", "sigma_r", default=0.013, type=float)
 @click.option("--lnAs", "target_lnAs", default=None, type=float,
               help="Target ln(10^10 A_s); Planck ≈ 3.044.")
 @click.option("--alphas", "target_alphas", default=None, type=float,
               help="Target running α_s = dn_s/dlnk.")
 @click.option("--nT", "target_nT", default=None, type=float,
               help="Target tensor spectral index n_T.")
-@click.option("--cT2", "target_cT2", default=None, type=float,
+@click.option("--cT2", "target_cT2", default=1.0, type=float,
               help="Target tensor sound speed squared at horizon crossing.")
 @click.option("--N", "N_pivot", default=55.0, type=float,
               help="Pivot e-folds before end of inflation.")
@@ -46,7 +46,7 @@ def main() -> None:
               help="How many candidates to print.")
 @click.option("--loss", "loss_kind",
               type=click.Choice(["production", "production_gw"]),
-              default="production", show_default=True,
+              default="production_gw", show_default=True,
               help="`production` (slow-roll closed-form, ~10 ms/eval) or "
                    "`production_gw` (full MS + Ω_GW transfer, ~1 s/eval).")
 @click.option("--gw-target", "gw_targets", multiple=True,
@@ -65,7 +65,7 @@ def main() -> None:
 @click.option("--allow-gr", is_flag=True, default=False,
               help="Allow ξ ≡ 0 candidates (the GR limit) in the search. "
                    "Default: rejected — we want EGB models, not vanilla GR.")
-@click.option("--egb-min-delta1", default=1.0e-4, type=float, show_default=True,
+@click.option("--egb-min-delta1", default=1.0e-6, type=float, show_default=True,
               help="Threshold below which |δ₁(φ_pivot)| triggers the GR-limit "
                    "rejection penalty.")
 @click.option("--v-families", default=None,
@@ -81,7 +81,7 @@ def main() -> None:
               help="PySR iterations per seed family. Default: niters / |families|.")
 @click.option("--julia-loss", "use_julia_loss",
               type=click.Choice(["auto", "on", "off"]),
-              default="auto", show_default=True,
+              default="on", show_default=True,
               help="Use Julia physics-χ² loss for V and ξ searches (no MSE "
                    "bias). `auto` falls back to multi-family MSE if Julia "
                    "fails.")

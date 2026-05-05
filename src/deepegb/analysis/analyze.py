@@ -30,11 +30,11 @@ from ..search.pysr_search import expressions_to_model
 
 def analyze_egb_model(
     V_expr: str,
-    xi_expr: str = "0",
+    xi_expr: str = "xi0/(phi0+phi)**2",
     *,
     N: float = 55.0,
     phi_range: tuple[float, float] = (-15.0, 15.0),
-    n_grid: int = 4001,
+    n_grid: int = 10001,
 ) -> dict[str, Any]:
     """Compute observables (n_s, n_T, r, α_s, P_S, P_T, c_T², c_S²) for an EGB
     model given as Sympy-style strings in `phi`.
@@ -62,7 +62,7 @@ def analyze_egb_model(
 
 def analyze_egb_relic_gw(
     V_expr: str,
-    xi_expr: str = "0",
+    xi_expr: str = "xi0/(phi0+phi)**2",
     *,
     N: float = 55.0,
     n_decades: float = 6.0,
