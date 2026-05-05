@@ -42,6 +42,16 @@ def _arxiv_mcp_command() -> tuple[str, list[str]]:
 
 def _import_mcp_tools_class():
     """Try the known import paths for Agno's MCPTools across versions."""
+    # `agno.tools.mcp` typically requires the separate `mcp` package
+    # (the official MCP Python SDK). If that's missing, Agno's import
+    # of its mcp submodule will itself ImportError. Detect that case
+    # specifically so the user gets a useful hint.
+    try:
+        import mcp                        # noqa: F401
+        mcp_pkg_present = True
+    except ImportError:
+        mcp_pkg_present = False
+
     candidates = (
         "agno.tools.mcp",
         "agno.tools.mcp_tools",
@@ -56,12 +66,18 @@ def _import_mcp_tools_class():
                 return mod.MCPTools
         except Exception as exc:    # noqa: BLE001
             last_exc = exc
+
+    if not mcp_pkg_present:
+        hint = ("the official MCP SDK is missing. "
+                "Run: pip install mcp")
+    else:
+        hint = ("your installed Agno version may not ship MCP support. "
+                "Update with: pip install -U 'agno>=1.0'")
     raise ImportError(
-        "Could not locate Agno's MCPTools class on any known import path. "
-        "Tried: " + ", ".join(candidates) + ". "
-        "MCP integration will be disabled. "
-        "If you've installed `agno`, your version may not have shipped MCP "
-        "support yet — try `pip install -U 'agno>=1.0' mcp`."
+        f"Could not locate Agno's MCPTools class — {hint}. "
+        f"Tried: {', '.join(candidates)}. MCP integration disabled; "
+        f"all other DeepEGB tools (search, analyze, plot, relic_gw, "
+        f"local RAG) continue to work."
     ) from last_exc
 
 

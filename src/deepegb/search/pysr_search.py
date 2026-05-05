@@ -230,7 +230,16 @@ def _make_pysr(cfg: SearchConfig, kind: str, fixed_other: Optional[str] = None) 
     # For thesis-grade work, replace this with a true Julia loss kernel
     # (see `physics/kernel.jl` and the `custom_loss` example in PySR docs).
 
-    return PySRRegressor(
+    # PySR's keyword set has drifted across versions:
+    #   * < 0.19  : `equation_file=...`
+    #   * 0.19+   : the equivalent kwarg is `output_directory=...`
+    #               (or `temp_equation_file=False` plus `tempdir=...`)
+    #   * 1.x     : `equation_file` removed, `output_directory` is the way.
+    # We try a sequence of (kwargs, value) pairs and accept the first that
+    # the installed version is happy with. The hall-of-fame CSV is also
+    # accessible via `regressor.equations_` after fit, so we don't strictly
+    # need to direct it ourselves; saving to runs/ is just a convenience.
+    base_kwargs: dict = dict(
         niterations=cfg.niterations,
         populations=cfg.populations,
         population_size=cfg.population_size,
@@ -243,9 +252,24 @@ def _make_pysr(cfg: SearchConfig, kind: str, fixed_other: Optional[str] = None) 
         deterministic=False,
         random_state=0,
         verbosity=0,
-        # Save scratch under runs/
-        equation_file=str(Path(cfg.runs_dir) / f"hall_of_fame_{kind}.csv"),
     )
+    runs_subdir = Path(cfg.runs_dir) / f"hall_of_fame_{kind}"
+    # Try each output-routing kwarg in order; drop the kwarg entirely if
+    # nothing works (PySR will use a tempdir).
+    for output_kwarg, output_value in (
+        ("output_directory", str(runs_subdir)),
+        ("equation_file", str(runs_subdir.with_suffix(".csv"))),
+        (None, None),
+    ):
+        kwargs = dict(base_kwargs)
+        if output_kwarg:
+            kwargs[output_kwarg] = output_value
+        try:
+            return PySRRegressor(**kwargs)
+        except TypeError:
+            continue
+    # Should be unreachable — at least the (None, None) path is keyword-free.
+    return PySRRegressor(**base_kwargs)
 
 
 # ---------------------------------------------------------------------------
