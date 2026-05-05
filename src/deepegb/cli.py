@@ -68,12 +68,36 @@ def main() -> None:
 @click.option("--egb-min-delta1", default=1.0e-4, type=float, show_default=True,
               help="Threshold below which |δ₁(φ_pivot)| triggers the GR-limit "
                    "rejection penalty.")
+@click.option("--v-families", default=None,
+              help="Comma-separated V seed families to sweep. Available: "
+                   "starobinsky, quadratic, quartic, hilltop, natural, "
+                   "pole, monodromy, exp_plateau. Default: "
+                   "starobinsky,hilltop,pole,exp_plateau")
+@click.option("--xi-families", default=None,
+              help="Comma-separated ξ seed families to sweep. Available: "
+                   "exp_decay, power_law, pole, tanh, linear, cosine. "
+                   "Default: exp_decay,pole,power_law,tanh")
+@click.option("--iters-per-family", default=None, type=int,
+              help="PySR iterations per seed family. Default: niters / |families|.")
+@click.option("--julia-loss", "use_julia_loss",
+              type=click.Choice(["auto", "on", "off"]),
+              default="auto", show_default=True,
+              help="Use Julia physics-χ² loss for V and ξ searches (no MSE "
+                   "bias). `auto` falls back to multi-family MSE if Julia "
+                   "fails.")
+@click.option("--joint-rounds", default=0, type=int, show_default=True,
+              help="Coordinate-descent joint refinement: number of (V↔ξ) "
+                   "swap rounds AFTER passes 1+2. Each round re-searches V "
+                   "with current ξ fixed, then re-searches ξ with new V "
+                   "fixed. 1–2 is usually enough; requires Julia loss.")
 @click.option("--out", "out_dir", default="runs", type=click.Path())
 def search(target_ns, sigma_ns, target_r, sigma_r,
            target_lnAs, target_alphas, target_nT, target_cT2,
            N_pivot, niterations, populations, maxsize, top,
            loss_kind, gw_targets, gw_band_min, T_reh_GeV,
            allow_gr, egb_min_delta1,
+           v_families, xi_families, iters_per_family,
+           use_julia_loss, joint_rounds,
            out_dir):
     """Run a joint symbolic-regression search for V(φ) and ξ(φ)."""
     from rich.console import Console
@@ -103,7 +127,15 @@ def search(target_ns, sigma_ns, target_r, sigma_r,
     if (gw_target_tuples or band_min) and loss_kind != "production_gw":
         loss_kind = "production_gw"
 
-    cfg = SearchConfig(
+    # Family lists (comma-separated)
+    def _parse_csv(s: str | None) -> tuple[str, ...] | None:
+        if not s:
+            return None
+        return tuple(x.strip() for x in s.split(",") if x.strip())
+    v_fams = _parse_csv(v_families)
+    xi_fams = _parse_csv(xi_families)
+
+    cfg_kwargs: dict = dict(
         target_ns=target_ns, sigma_ns=sigma_ns,
         target_r=target_r, sigma_r=sigma_r,
         target_lnAs=target_lnAs, target_alphas=target_alphas,
@@ -119,6 +151,16 @@ def search(target_ns, sigma_ns, target_r, sigma_r,
         egb_min_delta1=egb_min_delta1,
         runs_dir=out_dir,
     )
+    if v_fams is not None:
+        cfg_kwargs["v_seed_families"] = v_fams
+    if xi_fams is not None:
+        cfg_kwargs["xi_seed_families"] = xi_fams
+    if iters_per_family is not None:
+        cfg_kwargs["niterations_per_family"] = iters_per_family
+    julia_map = {"auto": "auto", "on": True, "off": False}
+    cfg_kwargs["use_julia_loss"] = julia_map[use_julia_loss]
+    cfg_kwargs["joint_rounds"] = joint_rounds
+    cfg = SearchConfig(**cfg_kwargs)
 
     console.print(
         f"[bold]Targets[/bold]:  n_s = {target_ns} ± {sigma_ns},  "
