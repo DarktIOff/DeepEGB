@@ -1,37 +1,33 @@
-"""DeepEGB Agno multi-agent runtime.
+"""DeepEGB Agno agent runtime.
 
 Architecture
 ------------
 
     ┌──────────────────────────────────────────────────────────────────┐
-    │ Main Agent (orchestrator)                                        │
+    │ DeepEGB Agent (single, all tools attached)                       │
     │                                                                  │
     │ Tools:                                                           │
+    │   • search_egb_potentials    — PySR multi-output search          │
     │   • analyze_egb_model_tool   — observables for given (V, ξ)      │
     │   • plot_egb_model_tool      — 6-panel diagnostic                │
     │   • relic_gw_spectrum_tool   — Ω_GW(f) h² + detector overlay     │
     │   • retrieve_literature_tool — local RAG over PDFs/TeX/HTML/MD   │
-    │   • [arXiv MCP]              — search/download/read papers       │
-    │                                                                  │
-    │ Delegates → SR Sub-Agent for model discovery                     │
-    └──────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-    ┌──────────────────────────────────────────────────────────────────┐
-    │ SR Sub-Agent                                                     │
-    │   • search_egb_potentials  — PySR multi-output joint search      │
+    │   • [arXiv MCP, when avail.] — search/download/read papers       │
     └──────────────────────────────────────────────────────────────────┘
 
-Design goals for the prompts below
-----------------------------------
+We use a SINGLE-agent layout rather than the orchestrator + sub-agent
+pattern from the DeepInflation paper, because Agno's multi-agent API has
+changed across versions and a single agent with a clear decision tree is
+simpler and more robust. The system prompt tells the agent how to chain
+the tools (RAG → analyze → plot → relic-GW → search).
+
+Design goals for the prompt below
+---------------------------------
 * Treat the LLM as a research assistant, not a chatbot. Cite real sources.
-* Decision tree: which tool to reach for, in which order, on which kind of
-  question. The model needs explicit decision rules — vague "be helpful"
-  prompts produce vague answers.
-* No hallucinated paper titles, observables, or numerical claims. Anything
-  factual must come from a tool call.
-* Slow-roll/perturbation/relic-GW results all flow through the production
-  kernel; the legacy r=16ε kernel was removed.
+* Decision tree: which tool to reach for, in which order.
+* No hallucinated paper titles, observables, or numerical claims —
+  everything factual comes from a tool call.
+* Production kernels only; the legacy r=16ε toy was removed.
 """
 from __future__ import annotations
 
@@ -55,49 +51,10 @@ except ImportError:  # pragma: no cover
 
 
 # ---------------------------------------------------------------------------
-# SR sub-agent: focused on running the search engine
-# ---------------------------------------------------------------------------
-SR_SUBAGENT_INSTRUCTIONS = """\
-You are the symbolic-regression sub-agent inside DeepEGB.
-
-ROLE
-  Translate natural-language requests into PySR runs that look for pairs
-  V(φ), ξ(φ) of single-field Einstein-Gauss-Bonnet inflation models matching
-  given observable targets, and report the best candidates back.
-
-YOUR TOOL
-  search_egb_potentials(target_ns, target_r, sigma_ns, sigma_r, N_pivot,
-                        niterations, populations, maxsize, runs_dir)
-
-WORKFLOW
-  1. Parse the target observables from the user / orchestrator.
-     • If only n_s is given, default target_r=0 and sigma_r=0.05.
-     • If only "match ACT DR6" is asked, use n_s = 0.974 ± 0.003,
-       r = 0.0 ± 0.018.
-     • Default to N_pivot = 55 unless told otherwise.
-  2. Choose hyperparameters:
-     • niterations 30, populations 30, maxsize 25 for an exploratory run.
-     • Push to niterations 60, populations 40, maxsize 30 only if the
-       first run produces high χ² (>5).
-  3. Call the tool. The result is JSON with up to 5 ranked candidates plus
-     the config used. Treat the JSON as authoritative.
-  4. Summarise the top 1–3 candidates: (V, ξ), predicted (n_s, r, n_T,
-     c_T²), χ². Mention closed-form simplifications if the expression is
-     a known family (Starobinsky-like, hilltop, brane, pole-inflation).
-
-DON'TS
-  • Never invent results. Only state what the tool returned.
-  • Never claim "this is a known model from XYZ paper" without checking
-     via the orchestrator's RAG / arXiv MCP tools.
-  • Don't run search loops longer than 90 s of wall time without saying so.
-"""
-
-
-# ---------------------------------------------------------------------------
-# Main orchestrator: research-assistant decision tree
+# Single-agent research-assistant decision tree
 # ---------------------------------------------------------------------------
 MAIN_AGENT_INSTRUCTIONS = """\
-You are the main agent of DeepEGB, a research assistant for inflationary
+You are DeepEGB, a research assistant for inflationary
 cosmology in Einstein-Gauss-Bonnet (EGB) gravity. You serve a working
 theoretical physicist (Gevorg) who is writing a PhD thesis on relic
 gravitational waves from EGB-inflation models. Treat them as a peer:
@@ -106,6 +63,14 @@ concise, rigorous, no fluff.
 ────────────────────────────────────────────────────────────────────
 TOOLS YOU HAVE AND WHEN TO CALL THEM
 ────────────────────────────────────────────────────────────────────
+
+search_egb_potentials(target_ns, target_r, sigma_ns, sigma_r, N_pivot,
+                      niterations, populations, maxsize, runs_dir)
+    Discover NEW (V(φ), ξ(φ)) candidates via PySR symbolic regression.
+    Defaults: target_r=0.0, sigma_r=0.05, N_pivot=55, niterations=30,
+    populations=30, maxsize=25. Bump to niters=60, populations=40 only
+    if a first run produces χ²>5. Returns JSON with the top 5
+    candidates plus the config used.
 
 analyze_egb_model_tool(V_expr, xi_expr, N=55)
     Computes observables (n_s, n_T, r, α_s, P_S, P_T, c_T², c_S², ε, δ₁,
@@ -136,9 +101,6 @@ retrieve_literature_tool(query, k=5)
     papers not in the local index. Use when local RAG returns nothing
     on a topic the user wants citations for.
 
-search_egb_potentials (DELEGATED to the SR sub-agent)
-    Use the team-delegation mechanism. You don't call this directly.
-
 ────────────────────────────────────────────────────────────────────
 DECISION TREE
 ────────────────────────────────────────────────────────────────────
@@ -156,10 +118,10 @@ Q: "Tell me about ACT DR6 / Planck / BICEP-Keck constraints"
 
 Q: "Find me a model that fits ..." / discovery questions
   1. Translate targets to numbers (n_s, r, optionally Ω_GW at f).
-  2. Delegate to the SR sub-agent.
-  3. When the sub-agent reports back: analyze_egb_model_tool the top 1–2
-     candidates and contextualise — is this Starobinsky-like? hilltop?
-     pole-inflation? Cite the family.
+  2. Call search_egb_potentials directly with those targets.
+  3. When it returns: analyze_egb_model_tool the top 1–2 candidates and
+     contextualise — is this Starobinsky-like? hilltop? pole-inflation?
+     Cite the family.
   4. If the user wanted GW signatures, also relic_gw_spectrum_tool.
 
 Q: "What relic-GW signature would this model leave at LISA?" /
@@ -220,57 +182,82 @@ def build_agent_team(
     enable_arxiv_mcp: bool = True,
     enable_local_rag: bool = True,
 ) -> "Agent":
-    """Build the orchestrator Agent + SR sub-agent."""
+    """Build the DeepEGB Agent with all production tools attached.
+
+    (`build_agent_team` is the historical name; we kept it for backwards-
+    compatibility — the agent is now a single agent with all tools,
+    not an orchestrator + sub-agent team.)
+    """
     if Agent is None:
         raise RuntimeError("Agno is not installed. `pip install agno`.")
 
     model = get_model(provider)
 
-    sr_agent = Agent(
-        name="SR Sub-Agent",
-        model=model,
-        instructions=SR_SUBAGENT_INSTRUCTIONS,
-        tools=[search_egb_potentials],
-        markdown=True,
-    )
-
-    main_tools: list = [
+    tools: list = [
+        search_egb_potentials,
         analyze_egb_model_tool,
         plot_egb_model_tool,
         relic_gw_spectrum_tool,
     ]
     if enable_local_rag:
-        main_tools.append(retrieve_literature_tool)
+        tools.append(retrieve_literature_tool)
 
     if enable_arxiv_mcp and has_arxiv_mcp_configured():
-        # Connect to the arXiv MCP server. Must be done from within an
-        # event loop; if MCP fails to start, fall through silently with
-        # a one-line notice.
         try:
-            mcp_tools = asyncio.get_event_loop().run_until_complete(
-                build_arxiv_mcp_tools()
-            )
-            main_tools.append(mcp_tools)
-            print("[DeepEGB] arXiv MCP connected.")
-        except RuntimeError:
             try:
-                mcp_tools = asyncio.run(build_arxiv_mcp_tools())
-                main_tools.append(mcp_tools)
-                print("[DeepEGB] arXiv MCP connected.")
-            except Exception as exc:
-                print(f"[DeepEGB] arXiv MCP not connected: {exc}")
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            mcp_tools = loop.run_until_complete(build_arxiv_mcp_tools())
+            tools.append(mcp_tools)
+            print("[DeepEGB] arXiv MCP connected.")
         except Exception as exc:
             print(f"[DeepEGB] arXiv MCP not connected: {exc}")
 
-    main_agent = Agent(
-        name="DeepEGB Main Agent",
+    # Some Agno versions removed the `markdown` kwarg; pass it conditionally.
+    agent_kwargs = dict(
+        name="DeepEGB",
         model=model,
         instructions=MAIN_AGENT_INSTRUCTIONS,
-        tools=main_tools,
-        team=[sr_agent],
-        markdown=True,
+        tools=tools,
     )
-    return main_agent
+    try:
+        return Agent(**agent_kwargs, markdown=True)
+    except TypeError:
+        return Agent(**agent_kwargs)
+
+
+# Convenience alias for code that imports the old name.
+build_agent = build_agent_team
+
+
+def _agent_say(agent, msg: str) -> None:
+    """Send a message to the agent and stream the response.
+
+    Tolerates Agno API drift: tries `print_response`, then `run` with
+    streaming, then a plain blocking call.
+    """
+    if hasattr(agent, "print_response"):
+        try:
+            agent.print_response(msg, stream=True)
+            return
+        except TypeError:
+            agent.print_response(msg)
+            return
+    if hasattr(agent, "run"):
+        result = agent.run(msg)
+        # Result may be a generator / iterator (streaming) or a single object.
+        if hasattr(result, "__iter__") and not isinstance(result, str):
+            for chunk in result:
+                content = getattr(chunk, "content", None) or str(chunk)
+                print(content, end="", flush=True)
+            print()
+        else:
+            print(getattr(result, "content", str(result)))
+        return
+    # Last resort
+    print(agent(msg))
 
 
 def run_chat(
@@ -280,14 +267,16 @@ def run_chat(
     enable_arxiv_mcp: bool = True,
     enable_local_rag: bool = True,
 ) -> None:
-    """Interactive REPL with the agent team. Quits on /exit or Ctrl-D."""
+    """Interactive REPL with the DeepEGB agent. /exit or Ctrl-D to quit."""
     agent = build_agent_team(
         provider=provider,
         enable_arxiv_mcp=enable_arxiv_mcp,
         enable_local_rag=enable_local_rag,
     )
     if initial_message:
-        agent.print_response(initial_message, stream=True)
+        _agent_say(agent, initial_message)
+        if not __import__("sys").stdin.isatty():
+            return     # one-shot mode under -m
 
     print("\nDeepEGB ready — type your request (/exit to quit).\n")
     while True:
@@ -300,4 +289,4 @@ def run_chat(
             continue
         if msg in {"/exit", "/quit", ":q"}:
             break
-        agent.print_response(msg, stream=True)
+        _agent_say(agent, msg)

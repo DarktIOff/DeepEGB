@@ -40,26 +40,59 @@ def _arxiv_mcp_command() -> tuple[str, list[str]]:
     return parts[0], parts[1:]
 
 
+def _import_mcp_tools_class():
+    """Try the known import paths for Agno's MCPTools across versions."""
+    candidates = (
+        "agno.tools.mcp",
+        "agno.tools.mcp_tools",
+        "agno.mcp",
+        "agno.tools.mcp.client",
+    )
+    last_exc: Exception | None = None
+    for mod_path in candidates:
+        try:
+            mod = __import__(mod_path, fromlist=["MCPTools"])
+            if hasattr(mod, "MCPTools"):
+                return mod.MCPTools
+        except Exception as exc:    # noqa: BLE001
+            last_exc = exc
+    raise ImportError(
+        "Could not locate Agno's MCPTools class on any known import path. "
+        "Tried: " + ", ".join(candidates) + ". "
+        "MCP integration will be disabled. "
+        "If you've installed `agno`, your version may not have shipped MCP "
+        "support yet — try `pip install -U 'agno>=1.0' mcp`."
+    ) from last_exc
+
+
 async def build_arxiv_mcp_tools() -> Any:
     """Construct an Agno MCPTools wrapper that launches the arXiv MCP server.
 
-    Must be called from within an async context (Agno requirement). The
-    returned tools list is consumed by `Agent(tools=[...])`.
-
-    Returns the MCPTools instance ready to be passed to the Agno Agent.
+    Must be called from within an async context (Agno requirement).
     """
-    try:
-        from agno.tools.mcp import MCPTools
-    except ImportError as exc:
-        raise RuntimeError(
-            "agno.tools.mcp is not available. "
-            "Update Agno: `pip install -U agno`."
-        ) from exc
+    MCPTools = _import_mcp_tools_class()
     cmd, args = _arxiv_mcp_command()
-    # MCPTools accepts a single command string in current Agno; let it parse.
     full_cmd = " ".join([cmd, *args])
-    tools = MCPTools(command=full_cmd, timeout_seconds=60)
-    await tools.initialize()
+    # Different Agno versions accept different kwargs; try the common ones.
+    for kwargs in (
+        dict(command=full_cmd, timeout_seconds=60),
+        dict(command=full_cmd),
+        dict(server=full_cmd),
+    ):
+        try:
+            tools = MCPTools(**kwargs)
+            break
+        except TypeError:
+            continue
+    else:
+        # Fall back to positional argument
+        tools = MCPTools(full_cmd)
+    # Initialise — old Agno used .initialize(), some versions use
+    # .connect() or do it lazily inside the Agent.
+    if hasattr(tools, "initialize"):
+        await tools.initialize()
+    elif hasattr(tools, "connect"):
+        await tools.connect()
     return tools
 
 
