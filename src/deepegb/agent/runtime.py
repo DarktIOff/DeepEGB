@@ -32,12 +32,14 @@ Design goals for the prompt below
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Optional
 
 from .llm import get_model
 from .mcp_tools import build_arxiv_mcp_tools, has_arxiv_mcp_configured
 from .tools import (
     analyze_egb_model_tool,
+    diagnose_egb_model_tool,
     plot_egb_model_tool,
     relic_gw_spectrum_tool,
     retrieve_literature_tool,
@@ -121,7 +123,7 @@ DECISION TREE
 Q: "What does Starobinsky inflation predict?" / specific named model
   1. retrieve_literature_tool — to ground statements in real papers.
   2. analyze_egb_model_tool — to verify numerical claims.
-  3. Optionally plot_egb_model_tool if a diagram clarifies things.
+  3. plot_egb_model_tool — always produce the 6-panel diagnostic.
   → Answer in prose with explicit (n_s, r, ...) values from the tool.
 
 Q: "Tell me about ACT DR6 / Planck / BICEP-Keck constraints"
@@ -135,7 +137,11 @@ Q: "Find me a model that fits ..." / discovery questions
   3. When it returns: analyze_egb_model_tool the top 1–2 candidates and
      contextualise — is this Starobinsky-like? hilltop? pole-inflation?
      Cite the family.
-  4. If the user wanted GW signatures, also relic_gw_spectrum_tool.
+  4. ALWAYS call plot_egb_model_tool on the best candidate. Save to
+     outputs/<short_name>_diagnostic.png. Report the saved path.
+  5. ALWAYS call relic_gw_spectrum_tool on the best candidate. Quote
+     Ω_GW h² at the LISA band (1 mHz) and the PTA band (10 nHz), compare
+     to detector floors, and state whether it is detectable.
 
 Q: "What relic-GW signature would this model leave at LISA?" /
    "Could this be detected by SKA / DECIGO / ET?"
@@ -282,6 +288,7 @@ def build_agent_team(
         analyze_egb_model_tool,
         plot_egb_model_tool,
         relic_gw_spectrum_tool,
+        diagnose_egb_model_tool,
     ]
     if enable_local_rag:
         tools.append(retrieve_literature_tool)
@@ -299,12 +306,14 @@ def build_agent_team(
         except Exception as exc:
             print(f"[DeepEGB] arXiv MCP not connected: {exc}")
 
+    debug = bool(int(os.environ.get("DEEPEGB_DEBUG", "0")))
     # Some Agno versions removed the `markdown` kwarg; pass it conditionally.
     agent_kwargs = dict(
         name="DeepEGB",
         model=model,
         instructions=MAIN_AGENT_INSTRUCTIONS,
         tools=tools,
+        debug_mode=debug,
     )
     try:
         return Agent(**agent_kwargs, markdown=True)
@@ -314,6 +323,33 @@ def build_agent_team(
 
 # Convenience alias for code that imports the old name.
 build_agent = build_agent_team
+
+
+def _run_coro_sync(coro):
+    """Run a coroutine from the synchronous CLI entrypoint."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def _chunk_text(chunk) -> tuple[str | None, str]:
+    content = getattr(chunk, "content", None)
+    reasoning = getattr(chunk, "reasoning_content", None)
+    event = getattr(chunk, "event", "") or ""
+    if content:
+        return content, event
+    if reasoning:
+        return reasoning, event or "reasoning"
+    delta = getattr(chunk, "delta", None)
+    if isinstance(delta, str) and delta:
+        return delta, event
+    return None, event
 
 
 def _agent_say(agent, msg: str, *, plain: bool = False) -> None:
@@ -328,6 +364,17 @@ def _agent_say(agent, msg: str, *, plain: bool = False) -> None:
 
     Tolerates Agno API drift across versions.
     """
+    if not plain and hasattr(agent, "aprint_response"):
+        try:
+            _run_coro_sync(agent.aprint_response(msg, stream=True))
+            return
+        except TypeError:
+            try:
+                _run_coro_sync(agent.aprint_response(msg))
+                return
+            except Exception:        # noqa: BLE001
+                pass
+
     if not plain and hasattr(agent, "print_response"):
         try:
             agent.print_response(msg, stream=True)
@@ -340,6 +387,38 @@ def _agent_say(agent, msg: str, *, plain: bool = False) -> None:
                 pass     # fall through to plain mode
 
     # Plain streaming: iterate chunks and print as they arrive.
+    if hasattr(agent, "arun"):
+        async def _async_plain_run():
+            try:
+                stream = agent.arun(msg, stream=True)
+            except TypeError:
+                stream = await agent.arun(msg)
+            if hasattr(stream, "__aiter__"):
+                last_was_thought = False
+                async for chunk in stream:
+                    content, event = _chunk_text(chunk)
+                    if event and event.lower().startswith(("tool", "reasoning",
+                                                           "thinking")):
+                        if not last_was_thought:
+                            print(f"\n[{event}] ", end="", flush=True)
+                        last_was_thought = True
+                        if content:
+                            print(content, end="", flush=True)
+                        continue
+                    last_was_thought = False
+                    if content is None:
+                        continue
+                    print(content, end="", flush=True)
+                print()
+                return
+            print(getattr(stream, "content", str(stream)))
+
+        try:
+            _run_coro_sync(_async_plain_run())
+            return
+        except Exception:        # noqa: BLE001
+            pass
+
     if hasattr(agent, "run"):
         try:
             stream = agent.run(msg, stream=True)
@@ -348,8 +427,7 @@ def _agent_say(agent, msg: str, *, plain: bool = False) -> None:
         if hasattr(stream, "__iter__") and not isinstance(stream, str):
             last_was_thought = False
             for chunk in stream:
-                content = getattr(chunk, "content", None)
-                event = getattr(chunk, "event", "") or ""
+                content, event = _chunk_text(chunk)
                 # Agno emits various event types: RunResponse, ToolCall,
                 # ToolResult, ReasoningStep ... Tag the non-content ones.
                 if event and event.lower().startswith(("tool", "reasoning",

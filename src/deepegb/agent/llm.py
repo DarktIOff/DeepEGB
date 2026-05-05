@@ -32,6 +32,7 @@ class ProviderConfig:
     model: str
     base_url: str | None = None
     api_key: str | None = None
+    timeout: float | None = None
 
 
 def _env(*names: str, default: str | None = None) -> str | None:
@@ -50,8 +51,9 @@ def resolve_provider(name: str | None = None) -> ProviderConfig:
         return ProviderConfig(
             name="local",
             model=_env("DEEPEGB_LLM_MODEL", default="local"),
-            base_url=_env("DEEPEGB_LLM_BASE_URL", default="http://127.0.0.1:8080/v1"),
+            base_url=_env("DEEPEGB_LLM_BASE_URL", default="http://127.0.0.1:8001/v1"),
             api_key=_env("DEEPEGB_LLM_API_KEY", default="sk-no-key-needed"),
+            timeout=float(_env("DEEPEGB_LLM_TIMEOUT", default="120")),
         )
     if name == "anthropic":
         return ProviderConfig(
@@ -105,6 +107,8 @@ def get_model(provider: str | None = None) -> Any:
             kwargs["base_url"] = cfg.base_url
         if cfg.api_key:
             kwargs["api_key"] = cfg.api_key
+        if cfg.timeout is not None:
+            kwargs["timeout"] = cfg.timeout
         # Some Agno versions name the kwarg `max_completion_tokens` instead.
         try:
             return OpenAIChat(**kwargs)

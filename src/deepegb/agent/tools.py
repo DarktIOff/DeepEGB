@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from ..analysis import analyze_egb_model, analyze_egb_relic_gw, plot_egb_model
-from ..search import SearchConfig, run_joint_search
+from ..search import SearchConfig, run_joint_search, run_joint_search_subprocess
 
 
 def _tool_error(category: str, msg: str, *, suggestion: str = "") -> str:
@@ -67,6 +67,15 @@ def search_egb_potentials(
     JSON string with up to 5 best (V, ξ) candidates ranked by χ², or a
     structured TOOL_ERROR on failure.  DO NOT retry on TOOL_ERROR.
     """
+    import sys
+
+    def _log(msg: str) -> None:
+        print(f"[DeepEGB] {msg}", file=sys.stderr, flush=True)
+
+    _log(f"search_egb_potentials called: ns={target_ns}, r={target_r}")
+    _log(f"stdout type={type(sys.stdout).__name__}, stderr type={type(sys.stderr).__name__}")
+    import threading
+    _log(f"current thread: {threading.current_thread().name}, is_main={threading.current_thread() is threading.main_thread()}")
     cfg = SearchConfig(
         target_ns=target_ns, sigma_ns=sigma_ns,
         target_r=target_r, sigma_r=sigma_r,
@@ -74,10 +83,11 @@ def search_egb_potentials(
         niterations=niterations, populations=populations,
         maxsize=maxsize,
         enforce_egb=enforce_egb,
+        use_julia_loss="auto",
         runs_dir=runs_dir,
     )
     try:
-        results = run_joint_search(cfg)
+        results = run_joint_search_subprocess(cfg, progress_cb=_log)
     except (ImportError, RuntimeError) as exc:
         msg = str(exc)
         if "pysr" in msg.lower() or "julia" in msg.lower():

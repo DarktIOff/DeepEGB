@@ -34,7 +34,8 @@ DEFAULT_ARXIV_MCP_CMD = "uvx arxiv-mcp-server --storage-path ~/.deepegb/arxiv_pa
 def _arxiv_mcp_command() -> tuple[str, list[str]]:
     """Return (command, args) for launching the arXiv MCP server."""
     raw = os.environ.get("DEEPEGB_ARXIV_MCP_CMD", DEFAULT_ARXIV_MCP_CMD)
-    parts = shlex.split(raw)
+    parts = [os.path.expanduser(part) if part.startswith("~") else part
+             for part in shlex.split(raw)]
     if not parts:
         raise RuntimeError("DEEPEGB_ARXIV_MCP_CMD is empty")
     return parts[0], parts[1:]
@@ -91,6 +92,7 @@ async def build_arxiv_mcp_tools() -> Any:
     full_cmd = " ".join([cmd, *args])
     # Different Agno versions accept different kwargs; try the common ones.
     for kwargs in (
+        dict(command=full_cmd, timeout_seconds=60, transport="stdio"),
         dict(command=full_cmd, timeout_seconds=60),
         dict(command=full_cmd),
         dict(server=full_cmd),
@@ -103,12 +105,22 @@ async def build_arxiv_mcp_tools() -> Any:
     else:
         # Fall back to positional argument
         tools = MCPTools(full_cmd)
-    # Initialise — old Agno used .initialize(), some versions use
-    # .connect() or do it lazily inside the Agent.
-    if hasattr(tools, "initialize"):
-        await tools.initialize()
-    elif hasattr(tools, "connect"):
+    # Agno's `initialize()` expects an already-open session and logs an error
+    # instead of raising when called too early. Prefer `connect()`, which
+    # creates the session and discovers tools end-to-end.
+    if hasattr(tools, "connect"):
         await tools.connect()
+    elif hasattr(tools, "initialize"):
+        await tools.initialize()
+
+    if not getattr(tools, "initialized", False):
+        raise RuntimeError(
+            "MCPTools did not reach the initialized state after connect()."
+        )
+    if not getattr(tools, "functions", None):
+        raise RuntimeError(
+            "MCPTools connected but exposed no arXiv tools. Check the MCP server command."
+        )
     return tools
 
 

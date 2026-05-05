@@ -39,26 +39,32 @@ except ImportError:  # PySR may not be installed in lightweight environments
 # Sympy → Julia source conversion
 # ---------------------------------------------------------------------------
 def _sympy_to_julia(expr_str: str) -> str:
-    """Convert a Sympy expression string in `phi` to a scalar Julia expr.
+    """Convert a Sympy expression string in `phi` (or `x0`) to a scalar Julia expr.
 
     The conversion goes through `sympy.julia_code` for correctness, then
     a small post-pass strips the vectorisation (`.*`, `./`, `.^`) so the
     output is a pure scalar expression that can be wrapped in `@inline f(p) = ...`.
     Fallback: regex `**` → `^`.
+
+    Accepts both `phi` and `x0` as the field variable — PySR returns
+    hall-of-fame expressions using `x0` (its internal feature name).
     """
     import re
 
     import sympy as sp
     phi = sp.Symbol("phi", real=True)
     try:
-        expr = sp.sympify(expr_str, locals={"phi": phi})
+        expr = sp.sympify(expr_str, locals={"phi": phi, "x0": phi})
         from sympy.printing.julia import julia_code
         out = julia_code(expr)
         # Strip dot-broadcasts (we want scalar Julia, not vectorised)
         out = re.sub(r"\.([\^\*/+\-])", r"\1", out)
         return out
     except Exception:
-        return re.sub(r"\*\*", "^", str(expr_str))
+        s = re.sub(r"\*\*", "^", str(expr_str))
+        # Fallback: also replace x0 with phi in raw text
+        s = re.sub(r"\bx0\b", "phi", s)
+        return s
 
 
 # ---------------------------------------------------------------------------
@@ -144,7 +150,20 @@ function deepegb_v_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
         end
     end
     if end_idx == 0
-        eps_min = minimum(eps_arr)
+        eps_found = false
+        eps_min = T(0)
+        @inbounds for i in 1:n
+            val = eps_arr[i]
+            if isfinite(val)
+                if !eps_found || val < eps_min
+                    eps_min = val
+                    eps_found = true
+                end
+            end
+        end
+        if !eps_found
+            return L(2.0e3)
+        end
         # Graded penalty: smaller |ε−1| ⇒ closer to having an end-of-inflation.
         return L(2.0e3 * (1.0 + abs(log10(max(abs(eps_min - T(1.0)), T(1e-30))))))
     end
@@ -170,9 +189,25 @@ function deepegb_v_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
         end
     end
     if pivot_idx == 0
-        N_max = maximum(filter(isfinite, N_grid))
+        finite_found = false
+        N_max = T(0)
+        @inbounds for i in 1:n
+            val = N_grid[i]
+            if isfinite(val)
+                if !finite_found || val > N_max
+                    N_max = val
+                    finite_found = true
+                end
+            end
+        end
+        if !finite_found
+            return L(1.5e3 * 2.0)
+        end
         deficit = max(T(0.0), N_pivot - N_max)
         return L(1.5e3 * (1.0 + deficit / N_pivot))
+    end
+    if pivot_idx == 1 || pivot_idx == n
+        return L(1.5e3)
     end
 
     eps_pivot = eps_arr[pivot_idx]
@@ -272,7 +307,20 @@ function deepegb_v_loss_with_xi(tree, dataset::Dataset{{T,L}}, options) where {{
         end
     end
     if end_idx == 0
-        eps_min = minimum(eps_arr)
+        eps_found = false
+        eps_min = T(0)
+        @inbounds for i in 1:n
+            val = eps_arr[i]
+            if isfinite(val)
+                if !eps_found || val < eps_min
+                    eps_min = val
+                    eps_found = true
+                end
+            end
+        end
+        if !eps_found
+            return L(2.0e3)
+        end
         return L(2.0e3 * (1.0 + abs(log10(max(abs(eps_min - T(1)), T(1e-30))))))
     end
 
@@ -297,9 +345,25 @@ function deepegb_v_loss_with_xi(tree, dataset::Dataset{{T,L}}, options) where {{
         end
     end
     if pivot_idx == 0
-        N_max = maximum(filter(isfinite, N_grid))
+        finite_found = false
+        N_max = T(0)
+        @inbounds for i in 1:n
+            val = N_grid[i]
+            if isfinite(val)
+                if !finite_found || val > N_max
+                    N_max = val
+                    finite_found = true
+                end
+            end
+        end
+        if !finite_found
+            return L(1.5e3 * 2.0)
+        end
         deficit = max(T(0), N_pivot - N_max)
         return L(1.5e3 * (1.0 + deficit / N_pivot))
+    end
+    if pivot_idx == 1 || pivot_idx == n
+        return L(1.5e3)
     end
 
     eps_pivot = eps_arr[pivot_idx]
@@ -416,7 +480,20 @@ function deepegb_xi_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
         end
     end
     if end_idx == 0
-        eps_min = minimum(eps_arr)
+        eps_found = false
+        eps_min = T(0)
+        @inbounds for i in 1:n
+            val = eps_arr[i]
+            if isfinite(val)
+                if !eps_found || val < eps_min
+                    eps_min = val
+                    eps_found = true
+                end
+            end
+        end
+        if !eps_found
+            return L(2.0e3)
+        end
         return L(2.0e3 * (1.0 + abs(log10(max(abs(eps_min - T(1)), T(1e-30))))))
     end
 
@@ -441,9 +518,25 @@ function deepegb_xi_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
         end
     end
     if pivot_idx == 0
-        N_max = maximum(filter(isfinite, N_grid))
+        finite_found = false
+        N_max = T(0)
+        @inbounds for i in 1:n
+            val = N_grid[i]
+            if isfinite(val)
+                if !finite_found || val > N_max
+                    N_max = val
+                    finite_found = true
+                end
+            end
+        end
+        if !finite_found
+            return L(1.5e3 * 2.0)
+        end
         deficit = max(T(0), N_pivot - N_max)
         return L(1.5e3 * (1.0 + deficit / N_pivot))
+    end
+    if pivot_idx == 1 || pivot_idx == n
+        return L(1.5e3)
     end
 
     eps_pivot = eps_arr[pivot_idx]
@@ -611,10 +704,14 @@ class SearchResult:
 # Sympy → callable
 # ---------------------------------------------------------------------------
 def _sympy_to_callable(expr_str: str) -> Callable[[np.ndarray], np.ndarray]:
-    """Parse a string expression in φ to a vectorised callable."""
+    """Parse a string expression in φ to a vectorised callable.
+
+    Accepts both `phi` and `x0` as the field variable — PySR returns
+    hall-of-fame expressions using `x0` (its internal feature name).
+    """
     phi = sp.Symbol("phi", real=True)
     try:
-        expr = sp.sympify(expr_str, locals={"phi": phi})
+        expr = sp.sympify(expr_str, locals={"phi": phi, "x0": phi})
     except Exception as e:
         raise ValueError(f"Could not parse expression {expr_str!r}: {e}")
     return sp.lambdify(phi, expr, modules=["numpy"])
@@ -731,8 +828,7 @@ def _make_pysr(cfg: SearchConfig, kind: str, fixed_other: Optional[str] = None,
         model_selection="best",
         progress=False,
         deterministic=False,
-        random_state=0,
-        verbosity=0,
+        verbosity=1,
     )
     if julia_loss_source is not None:
         # Bypass MSE: PySR will compile this Julia source as the loss.
@@ -767,6 +863,7 @@ def run_joint_search(
     progress_cb: Optional[Callable[[str], None]] = None,
 ) -> list[SearchResult]:
     """Run a joint search for (V, ξ) and return ranked candidates by χ²."""
+    import sys
     if PySRRegressor is None:
         raise RuntimeError("PySR is not installed.")
 
@@ -815,9 +912,18 @@ def run_joint_search(
         # transposed via Julia's row-major / column-major view.
         y_dummy = np.zeros(len(phi), dtype=np.float32)
         try:
+            log("      building PySR regressor for V (Julia loss) …")
             pysr_V = _make_pysr(cfg_per_family, kind="V_julia",
                                 julia_loss_source=loss_src)
+            log("      calling pysr_V.fit() — Julia JIT may take 2–5 min on first run …")
+            print(f"[DeepEGB] PySR V-fit starting | stdout={type(sys.stdout).__name__} stderr={type(sys.stderr).__name__}",
+                  file=sys.stderr, flush=True)
+            import os as _os
+            print(f"[DeepEGB] stdout fd={sys.stdout.fileno() if hasattr(sys.stdout,'fileno') else 'N/A'} "
+                  f"stderr fd={sys.stderr.fileno() if hasattr(sys.stderr,'fileno') else 'N/A'}",
+                  file=sys.stderr, flush=True)
             pysr_V.fit(X_julia, y_dummy)
+            print("[DeepEGB] PySR V-fit done", file=sys.stderr, flush=True)
             family_candidates = _hall_of_fame_strings(pysr_V, top_k=cfg.top_k_V * 2)
             log(f"      Julia-loss search: {len(family_candidates)} candidates "
                 f"(top: {family_candidates[0] if family_candidates else '—'})")
@@ -900,7 +1006,11 @@ def run_joint_search(
                 pysr_xi = _make_pysr(cfg_per_family,
                                      kind=f"xi_v{v_idx}_julia",
                                      julia_loss_source=xi_loss_src)
+                print(f"[DeepEGB] PySR ξ-fit starting (V{v_idx})",
+                      file=sys.stderr, flush=True)
                 pysr_xi.fit(X_julia, y_dummy)
+                print(f"[DeepEGB] PySR ξ-fit done (V{v_idx})",
+                      file=sys.stderr, flush=True)
                 julia_xi = _hall_of_fame_strings(pysr_xi, top_k=cfg.top_k_V * 2)
                 log(f"      Julia ξ-loss: {len(julia_xi)} candidates "
                     f"(top: {julia_xi[0] if julia_xi else '—'})")
@@ -1047,6 +1157,92 @@ def run_joint_search(
     log(f"Final pool: {len(results)} candidates; "
         f"best χ² = {results[0].chi2 if results else float('nan'):.3g}")
     return results
+
+
+def _subprocess_worker(cfg_dict: dict, result_q, log_q) -> None:
+    """Entry point for the spawned subprocess that runs PySR search.
+
+    juliacall deadlocks when called from asyncio.to_thread() because the
+    asyncio event loop occupies the main thread and juliacall cannot complete
+    its Python-callback handshake. Running in a spawned subprocess gives PySR
+    a clean main thread with no asyncio state.
+    """
+    try:
+        from deepegb.search.pysr_search import SearchConfig, run_joint_search
+
+        cfg = SearchConfig(**{
+            k: v for k, v in cfg_dict.items()
+            if k in SearchConfig.__dataclass_fields__
+        })
+
+        def log(msg: str) -> None:
+            try:
+                log_q.put_nowait(msg)
+            except Exception:
+                pass
+
+        results = run_joint_search(cfg, progress_cb=log)
+        result_q.put(("ok", results))
+    except Exception as exc:
+        import traceback
+        result_q.put(("error", f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"))
+
+
+def run_joint_search_subprocess(
+    cfg: SearchConfig,
+    *,
+    progress_cb: Optional[Callable[[str], None]] = None,
+) -> list[SearchResult]:
+    """Run `run_joint_search` in a spawned subprocess.
+
+    Use this instead of `run_joint_search` when calling from within an
+    asyncio.to_thread() context (e.g. Agno tool execution), where juliacall
+    deadlocks because the asyncio event loop owns the main thread.
+    """
+    import multiprocessing as mp
+
+    ctx = mp.get_context("spawn")
+    result_q: mp.Queue = ctx.Queue()
+    log_q: mp.Queue = ctx.Queue()
+
+    proc = ctx.Process(
+        target=_subprocess_worker,
+        args=(cfg.to_dict(), result_q, log_q),
+        daemon=True,
+    )
+    proc.start()
+
+    log = progress_cb or (lambda s: None)
+
+    while proc.is_alive():
+        # Drain log messages while the subprocess is running.
+        while True:
+            try:
+                log(log_q.get(timeout=0.2))
+            except Exception:
+                break
+
+    # Drain any remaining log messages after process exits.
+    while True:
+        try:
+            log(log_q.get_nowait())
+        except Exception:
+            break
+
+    proc.join()
+
+    try:
+        status, data = result_q.get_nowait()
+    except Exception:
+        code = proc.exitcode
+        raise RuntimeError(
+            f"Search subprocess exited (code={code}) without returning results. "
+            f"Check stderr for errors."
+        )
+
+    if status == "error":
+        raise RuntimeError(data)
+    return data
 
 
 def _hall_of_fame_strings(reg: "PySRRegressor", top_k: int = 5) -> list[str]:
