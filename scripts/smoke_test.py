@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "src"))
 import numpy as np
 
 from deepegb.analysis import analyze_egb_model, plot_egb_model
-from deepegb.physics import EGBModel, analyze_model
+from deepegb.physics import EGBModel, compute_observables_full
 
 
 def gr_starobinsky():
@@ -28,7 +28,7 @@ def gr_starobinsky():
         xi=lambda p: 0.0 * p,
         name="Starobinsky",
     )
-    obs = analyze_model(model, N_target=55.0, phi_range=(0.1, 8.0), n_grid=4001)
+    obs = compute_observables_full(model, N_pivot=55.0, phi_range=(0.1, 8.0), n_grid=4001)
     print(f"    n_s = {obs.n_s:.5f}  (expected ≈ {1 - 2/55:.5f})")
     print(f"    r   = {obs.r:.5f}    (expected r ≪ 0.04)")
     print(f"    ε   = {obs.epsilon:.4g},  φ_end = {obs.phi_end:.4f},  φ_N = {obs.phi_N:.4f}")

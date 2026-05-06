@@ -1,12 +1,19 @@
 # DeepEGB default configuration.
+# This is the single source of truth for all numeric defaults used across
+# the codebase. Every module that needs a default should import from
+# `src/deepegb/config/defaults.py`, which loads this file.
 
 physics:
   # Pivot e-folds before end of inflation at which observables are evaluated.
+  # Range [50, 60] motivated by Liddle & Leach 2003 (astro-ph/0306262)
+  # and Martin & Ringeval 2010 (arXiv:1004.4654) self-consistency analysis.
   N_pivot: 55
+  N_pivot_min: 50
+  N_pivot_max: 60
   # Range of phi (in M_pl) to sample when searching for end-of-inflation.
   phi_range: [-15.0, 15.0]
   # Numerical step for derivatives / integration.
-  d_phi: 1.0e-5
+  d_phi: 1.0e-4
   # Reduced Planck mass (we work in units M_pl = 1).
   M_pl: 1.0
 
@@ -16,22 +23,86 @@ search:
   populations: 35
   population_size: 33
   maxsize: 25
+  # Broad analytic operator set for symbolic regression.
+  # Covers transcendental, algebraic, and special functions common in
+  # inflationary model building.
   binary_operators: ["+", "-", "*", "/", "^"]
-  unary_operators: ["exp", "log", "sqrt", "tanh"]
+  unary_operators:
+    - "exp"
+    - "log"
+    - "sqrt"
+    - "tanh"
+    - "sin"           # natural / axionic inflation
+    - "cos"           # natural / axionic inflation
+    - "abs"           # monodromy-style
+    - "atan"          # bounded smooth
+    - "sinh"          # exponential-like plateau
+    - "cosh"          # symmetric potentials
+    - "tanh"          # bounded smooth (explicit)
+    - "log1p"         # numerically stable for small arguments
+    - "expm1"         # numerically stable for small arguments
   # Multi-output: PySR will discover (V(phi), xi(phi)) jointly.
   outputs: ["V", "xi"]
   # Penalty on complexity to discourage overfit.
   parsimony: 1.0e-3
-  # Optional: warm-start from these ansaetze (free constants will be tuned).
+  # Seed expressions for V and xi with literature references.
+  # PySR uses these as starting points / warm-start ansaetze.
   seed_expressions:
     V:
-      - "phi^2"
-      - "(1 - exp(-phi))^2"        # Starobinsky-like
-      - "1 - 8.0 / phi^2"           # ACT-favored Kallosh family
+      # Standard chaotic models
+      - "phi^2"                                          # m²φ² chaotic; Linde 1983
+      - "phi^4"                                          # λφ⁴ chaotic; ruled out by Planck
+      - "0.5*phi^2"                                      # canonical quadratic
+      # Starobinsky / plateau family
+      - "(1 - exp(-phi))^2"                              # Starobinsky 1980 (Phys.Lett.B 91)
+      - "(1 - exp(-sqrt(2/3)*phi))^2"                   # R² inflation, Starobinsky 1980
+      - "1 - 2*exp(-sqrt(2/3)*phi)"                     # linearised Starobinsky
+      # Kallosh / brane / pole family
+      - "1 - 8.0 / phi^2"                               # ACT-favored Kallosh family (arXiv:2304.05203)
+      - "1 - 1/phi^2"                                    # pole inflation (arXiv:1303.1201)
+      - "1 - 2/phi"                                      # brane inflation (arXiv:hep-th/0004024)
+      # Hilltop family
+      - "(1 - (phi/5)^2)^2"                              # hilltop quartic (arXiv:hep-ph/0403227)
+      - "(1 - phi^2/25)^2"                               # hilltop canonical
+      # Natural / axionic
+      - "1 + cos(phi/3)"                                 # natural inflation (arXiv:hep-ph/9301212)
+      - "1 + cos(phi)"                                   # axion monodromy seed
+      # Exponential plateau family
+      - "1 - exp(-phi/3)"                                # exp plateau (arXiv:1309.4095)
+      - "1 - exp(-phi)"                                  # simplest exp plateau
+      # α-attractor family
+      - "phi^2/(1 + phi^2)"                              # T-model (arXiv:1402.6827)
+      - "tanh(phi/2)^2"                                  # E-model α-attractor (arXiv:1309.4095)
+      - "phi^2/(6 - phi^2)"                              # α-attractor with α=1 (arXiv:1402.6827)
+      # String-inspired
+      - "(phi^2 - 1)^2"                                  # double-well string-inspired
+      - "1/(1 + exp(-phi))"                              # Fermi-Dirac type (arXiv:1503.07521)
+      - "abs(phi) + 0.3*cos(phi/2)"                      # axion monodromy with oscillations (arXiv:1402.4088)
+      - "phi^(2/3)"                                      # large-field monodromy (arXiv:1402.4088)
     xi:
-      - "0"                         # GR limit
-      - "xi0 * exp(-lambda * phi)"  # commonly used in EGB inflation
-      - "xi0 / V(phi)"              # Kanti-style "natural" coupling
+      # Non-trivial EGB couplings (no GR default here)
+      - "xi0 * exp(-lambda * phi)"                       # string-dilaton-like (arXiv:hep-th/9904152)
+      - "xi0 / (phi^2 + beta)"                           # Kanti-style pole coupling (arXiv:1009.2993)
+      - "xi0 * phi^n"                                    # power-law EGB (arXiv:1811.01580)
+      - "xi0 / V(phi)"                                   # Kanti "natural" coupling (arXiv:1009.2993)
+      - "xi0 * exp(-lambda * phi^2)"                     # Gaussian localised coupling (arXiv:1810.04645)
+      - "xi0 * tanh(phi / mu)"                           # bounded smooth coupling (arXiv:1810.04645)
+      - "xi0 * cos(phi / f)"                             # periodic / axionic GB (arXiv:gr-qc/9901002)
+      - "xi0 * sin(phi / f)"                             # periodic shifted phase
+      - "xi0 / (1 + exp(phi / mu))"                      # Fermi-Dirac-like switch (arXiv:1503.07521)
+      - "xi0 * phi / (1 + phi^2)"                        # bounded rational (arXiv:1810.04645)
+      - "xi0 * (1 - exp(-phi^2))"                        # Gaussian turn-on (arXiv:1810.04645)
+      - "xi0 * atan(phi)"                                # bounded arctangent
+      - "xi0 * log(1 + phi^2)"                           # log growth (arXiv:1810.04645)
+      - "xi0 * sech(phi)"                                # localised hyperbolic (arXiv:hep-th/9904152)
+      - "xi0 * erf(phi)"                                 # error function switch
+      - "xi0 / (phi^4 + beta)"                           # higher-order pole (arXiv:1009.2993)
+      - "xi0 * exp(-abs(phi))"                           # Laplace localised
+      - "xi0 * sinh(phi) / cosh(phi)"                    # same as tanh, explicit
+      - "xi0 / (1 + phi^4)"                              # quartic-bounded rational
+      - "xi0 * (phi - phi0)^2"                           # quadratic minimum
+      - "xi0 * abs(phi)"                                 # absolute-value coupling
+      - "xi0 * sign(phi) * sqrt(abs(phi))"               # fractional power
 
 targets:
   # ACT DR6 reference (used in DeepInflation example).
@@ -39,6 +110,26 @@ targets:
   ns_sigma: 0.0030
   r: 0.025
   r_sigma: 0.013
+
+# Default xi expression — must be non-trivial (no GR default).
+# Used by analyze, plot, and CLI commands as the default coupling.
+default_xi_expr: "xi0/(phi^2 + 1)"
+
+# Gravitational-wave spectrum defaults.
+gw:
+  # n_decades: log-decades of k around the pivot for the relic GW spectrum.
+  # Policy: 8 decades covers the LISA–DECIGO band; 10 gives the full RD+MD
+  # transition. More decades = slower but more complete spectrum.
+  # See Watanabe & Komatsu 2006 (astro-ph/0604176) for the transfer function.
+  n_decades: 8.0
+  # n_k: number of k samples (log-spaced) for the relic GW spectrum.
+  n_k: 30
+  # T_reh_GeV: default reheating temperature in GeV. Controls the g_*
+  # factor in the transfer function. 1e15 GeV ≈ instant reheating near GUT.
+  # See Kuroyanagi et al. 2015 (arXiv:1407.4785) for T_reh sensitivity.
+  T_reh_GeV: 1.0e15
+  # Sub-horizon factor for Bunch-Davies initial conditions in MS integration.
+  sub_horizon_factor: 50.0
 
 llm:
   # See .env for endpoint and keys.

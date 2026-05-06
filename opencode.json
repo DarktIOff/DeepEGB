@@ -3,52 +3,10 @@
 
   // ── DEFAULT ROUTING ─────────────────────────────────────────────
   // Claude Opus 4.7 plans; GPT-5.3 Codex turns the plan into technical work;
-  // GLM-5 performs implementation; GLM-4.7-Flash handles lookup/simple tasks.
+  // GLM-5.1 performs implementation; GLM-4.5-Air handles lookup/simple tasks.
   "model": "openai/gpt-5.3-codex",
-  "small_model": "zai-api/glm-4.7-flash",
+  "small_model": "zai-coding-plan/glm-4.5-air",
   "default_agent": "architect",
-
-  // ── PROVIDERS ──────────────────────────────────────────────────
-  // anthropic, openai, and zai-coding-plan are built into OpenCode.
-  // Z.AI direct API is configured explicitly so glm-5 and glm-4.7-flash
-  // use their documented API model IDs.
-  "provider": {
-    "zai-api": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Z.AI API",
-      "options": {
-        "baseURL": "https://api.z.ai/api/paas/v4/",
-        "apiKey": "{env:ZAI_API_KEY}"
-      },
-      "models": {
-        "glm-5": {
-          "name": "GLM-5",
-          "contextLength": 200000
-        },
-        "glm-4.7-flash": {
-          "name": "GLM-4.7-Flash",
-          "contextLength": 202752
-        }
-      }
-    },
-
-    // Local Qwen via Tailscale/remote OpenAI-compatible server.
-    // Update baseURL manually when the remote endpoint changes.
-    "local": {
-      "npm": "@ai-sdk/openai-compatible",
-      "name": "Remote local Qwen",
-      "options": {
-        "baseURL": "http://100.x.x.x:8001/v1",
-        "apiKey": "none"
-      },
-      "models": {
-        "Qwen3.6-35B-A3B": {
-          "name": "Qwen3.6-35B-A3B (remote local)",
-          "contextLength": 262144
-        }
-      }
-    }
-  },
 
   // ── AGENTS ─────────────────────────────────────────────────────
   "agent": {
@@ -75,19 +33,27 @@
       "model": "openai/gpt-5.3-codex",
       "temperature": 0.2,
       "tools": {
+        "read": true,
+        "grep": true,
+        "glob": true,
+        "list": true,
         "write": false,
         "edit": false,
-        "bash": true,
+        "bash": false,
+        "task": true,
+        "todoread": true,
+        "todowrite": true,
+        "question": true,
         "arxiv_*": true
       },
-      "instructions": "You are the DeepEGB technical architect. Take the planning agent's research plan and turn it into precise implementation tasks for worker agents. Inspect the repository before assigning work. Specify files, interfaces, equations, validation steps, and failure modes. Do not make file edits yourself unless explicitly asked; hand off implementation to the hands/build agents. Use arXiv MCP when an implementation detail requires a paper, equation, or citation. Keep DeepEGB's purpose central: LLM plus theoretical-physics analysis for Einstein-Gauss-Bonnet inflation, symbolic regression, exact/production physics kernels, literature grounding, and reproducible diagnostics."
+      "instructions": "You are the DeepEGB technical architect and implementation coordinator. Take each numbered or bulleted point from the planning agent's research plan and convert it into exact worker tasks, then delegate implementation through the task tool to general, hands, or build. Do not edit files yourself and do not run shell commands yourself; workers perform edits and validation. Inspect the repository with read, list, glob, and grep before assigning work. Track Claude plan-point coverage with todowrite/todoread so no point is skipped or silently left undone. For every plan point, write one or more concrete tasks that specify: target files and symbols, exact logic or equations to implement, interfaces and data shapes, invariants and failure modes, the worker/subagent that should do the task, and the validation command or manual check that proves the task is correct. Include expected validation signals, such as tests passing, numerical tolerance ranges, generated artifact paths, or diagnostics that must change. If a plan point cannot be validated yet, ask the user a question or state the missing prerequisite instead of delegating vague work. Do not skip Claude plan points, merge unrelated points, or hand off tasks without acceptance criteria. Use arXiv MCP when an implementation detail requires a paper, equation, or citation. Keep DeepEGB's purpose central: LLM plus theoretical-physics analysis for Einstein-Gauss-Bonnet inflation, symbolic regression, exact/production physics kernels, literature grounding, and reproducible diagnostics."
     },
 
     // Primary worker — implementation hands.
     "build": {
       "mode": "primary",
-      "description": "Primary GLM-5 implementation worker.",
-      "model": "zai-api/glm-5",
+      "description": "Primary GLM-5.1 implementation worker.",
+      "model": "zai-coding-plan/glm-5.1",
       "temperature": 0.2,
       "tools": {
         "write": true,
@@ -98,11 +64,11 @@
       "instructions": "You are the hands-on DeepEGB implementation agent. Execute architect-scoped tasks exactly, editing files and running focused validation. Prefer minimal, root-cause fixes over broad rewrites. When touching physics code, preserve a clear paper/equation trail, avoid unjustified approximations, and keep defaults consistent across modules. Use arXiv MCP when a formula, citation, or literature-backed default is needed. Report changed files, commands run, and unresolved assumptions."
     },
 
-    // GLM-5 alias for explicit worker calls.
+    // GLM-5.1 alias for explicit worker calls.
     "hands": {
       "mode": "subagent",
-      "description": "GLM-5 hands worker for scoped implementation tasks.",
-      "model": "zai-api/glm-5",
+      "description": "GLM-5.1 hands worker for scoped implementation tasks.",
+      "model": "zai-coding-plan/glm-5.1",
       "temperature": 0.2,
       "tools": {
         "write": true,
@@ -110,14 +76,29 @@
         "bash": true,
         "arxiv_*": true
       },
-      "instructions": "You are the GLM-5 hands worker for DeepEGB. Implement assigned tasks from the architect, stay within the requested file scope, do not redesign unrelated areas, and validate changes with the narrowest relevant command. For physics changes, cite the source equation or flag the missing reference instead of inventing formulas."
+      "instructions": "You are the GLM-5.1 hands worker for DeepEGB. Implement assigned tasks from the architect, stay within the requested file scope, do not redesign unrelated areas, and validate changes with the narrowest relevant command. For physics changes, cite the source equation or flag the missing reference instead of inventing formulas."
+    },
+
+    // Built-in general override. Architect may call @general/Task general.
+    "general": {
+      "mode": "subagent",
+      "description": "General GLM-5.1 subagent for multi-step implementation tasks.",
+      "model": "zai-coding-plan/glm-5.1",
+      "temperature": 0.2,
+      "tools": {
+        "write": true,
+        "edit": true,
+        "bash": true,
+        "arxiv_*": true
+      },
+      "instructions": "You are the general implementation subagent for DeepEGB. Execute scoped implementation and investigation tasks from the architect, edit only the requested files, run focused validation, and report changed files, commands run, and any unresolved assumptions. For physics changes, cite the source equation or explicitly flag missing literature support."
     },
 
     // Fast lookup / small task agent.
     "lookup": {
       "mode": "subagent",
-      "description": "Fast GLM-4.7-Flash lookup and simple read-only tasks.",
-      "model": "zai-api/glm-4.7-flash",
+      "description": "Fast GLM-4.5-Air lookup and simple read-only tasks.",
+      "model": "zai-coding-plan/glm-4.5-air",
       "temperature": 0.2,
       "tools": {
         "write": false,
@@ -128,25 +109,11 @@
       "instructions": "You are the fast lookup agent for DeepEGB. Handle quick repository questions, citation lookups, arXiv searches, terminology checks, and simple summaries. Do not edit files. Prefer concise answers with exact paper identifiers, file paths, or commands when relevant."
     },
 
-    // Optional remote local model; may be unavailable.
-    "local-simple": {
-      "mode": "subagent",
-      "description": "Optional remote Qwen simple-task agent; endpoint may be unavailable.",
-      "model": "local/Qwen3.6-35B-A3B",
-      "temperature": 0.2,
-      "tools": {
-        "write": false,
-        "edit": false,
-        "bash": false
-      },
-      "instructions": "You are an optional local simple-task agent for DeepEGB running on a remote machine. Use this agent only for low-risk summarization, simple repository lookup, and inexpensive first-pass reasoning. The endpoint may be unavailable; if a task needs reliability, use lookup or architect instead. Do not edit files."
-    },
-
     // Mechanical edits when no interpretation is required.
     "fix": {
       "mode": "subagent",
       "description": "Mechanical file edits with no interpretation.",
-      "model": "zai-api/glm-4.7-flash",
+      "model": "zai-coding-plan/glm-4.5-air",
       "temperature": 0.1,
       "tools": {
         "write": true,
@@ -159,17 +126,6 @@
 
   // ── MCP SERVERS ────────────────────────────────────────────────
   "mcp": {
-    // Wolfram MCP — uses the WolframLocalMCPBridge.app native stdio server.
-    "wolfram": {
-      "type": "local",
-      "command": ["/Applications/WolframLocalMCPBridge.app/Contents/Resources/bin/mcp_server"],
-      "environment": {
-        "WOLFRAM_APP_ID": "{env:WOLFRAM_APP_ID}"
-      },
-      "enabled": true,
-      "timeout": 30000
-    },
-
     // arXiv — search, download PDFs, extract text from papers.
     "arxiv": {
       "type": "local",
@@ -185,7 +141,6 @@
   "permission": {
     "ask": "allow",
     "mcp": {
-      "wolfram": "allow",
       "arxiv": "allow"
     }
   }

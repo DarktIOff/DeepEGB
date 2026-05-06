@@ -12,6 +12,8 @@ try:
 except Exception:  # python-dotenv may not be installed in minimal envs
     pass
 
+from .config.defaults import DEFAULTS
+
 
 @click.group()
 @click.version_option(package_name="deepegb")
@@ -23,25 +25,25 @@ def main() -> None:
 # search
 # ---------------------------------------------------------------------------
 @main.command()
-@click.option("--ns", "target_ns", default=0.9752, type=float,
+@click.option("--ns", "target_ns", default=None, type=float,
               help="Target scalar spectral index n_s.")
-@click.option("--ns-sigma", "sigma_ns", default=0.0030, type=float)
-@click.option("--r", "target_r", default=0.025, type=float,
+@click.option("--ns-sigma", "sigma_ns", default=None, type=float)
+@click.option("--r", "target_r", default=None, type=float,
               help="Target tensor-to-scalar ratio r.")
-@click.option("--r-sigma", "sigma_r", default=0.013, type=float)
+@click.option("--r-sigma", "sigma_r", default=None, type=float)
 @click.option("--lnAs", "target_lnAs", default=None, type=float,
               help="Target ln(10^10 A_s); Planck ≈ 3.044.")
 @click.option("--alphas", "target_alphas", default=None, type=float,
               help="Target running α_s = dn_s/dlnk.")
 @click.option("--nT", "target_nT", default=None, type=float,
               help="Target tensor spectral index n_T.")
-@click.option("--cT2", "target_cT2", default=1.0, type=float,
+@click.option("--cT2", "target_cT2", default=None, type=float,
               help="Target tensor sound speed squared at horizon crossing.")
-@click.option("--N", "N_pivot", default=55.0, type=float,
+@click.option("--N", "N_pivot", default=None, type=float,
               help="Pivot e-folds before end of inflation.")
-@click.option("--niters", "niterations", default=40, type=int)
-@click.option("--populations", default=35, type=int)
-@click.option("--maxsize", default=25, type=int)
+@click.option("--niters", "niterations", default=None, type=int)
+@click.option("--populations", default=None, type=int)
+@click.option("--maxsize", default=None, type=int)
 @click.option("--top", default=5, type=int, show_default=True,
               help="How many candidates to print.")
 @click.option("--loss", "loss_kind",
@@ -59,13 +61,13 @@ def main() -> None:
                    "Format: 'F_LO:F_HI:OMEGA_MIN'. Example: "
                    "--gw-band-min 1e-4:1e-1:1e-13. Implies "
                    "--loss production_gw.")
-@click.option("--T-reh", "T_reh_GeV", default=1.0e15, type=float,
+@click.option("--T-reh", "T_reh_GeV", default=None, type=float,
               help="Reheating temperature in GeV (only matters for the "
                    "transfer-function g_* factor in `production_gw`).")
 @click.option("--allow-gr", is_flag=True, default=False,
               help="Allow ξ ≡ 0 candidates (the GR limit) in the search. "
                    "Default: rejected — we want EGB models, not vanilla GR.")
-@click.option("--egb-min-delta1", default=1.0e-6, type=float, show_default=True,
+@click.option("--egb-min-delta1", default=None, type=float,
               help="Threshold below which |δ₁(φ_pivot)| triggers the GR-limit "
                    "rejection penalty.")
 @click.option("--v-families", default=None,
@@ -90,7 +92,7 @@ def main() -> None:
                    "swap rounds AFTER passes 1+2. Each round re-searches V "
                    "with current ξ fixed, then re-searches ξ with new V "
                    "fixed. 1–2 is usually enough; requires Julia loss.")
-@click.option("--out", "out_dir", default="runs", type=click.Path())
+@click.option("--out", "out_dir", default=None, type=click.Path())
 def search(target_ns, sigma_ns, target_r, sigma_r,
            target_lnAs, target_alphas, target_nT, target_cT2,
            N_pivot, niterations, populations, maxsize, top,
@@ -106,6 +108,30 @@ def search(target_ns, sigma_ns, target_r, sigma_r,
     from .search import SearchConfig, run_joint_search
 
     console = Console()
+
+    # Use centralized defaults where CLI args are not specified
+    if target_ns is None:
+        target_ns = DEFAULTS.targets.ns
+    if sigma_ns is None:
+        sigma_ns = DEFAULTS.targets.ns_sigma
+    if target_r is None:
+        target_r = DEFAULTS.targets.r
+    if sigma_r is None:
+        sigma_r = DEFAULTS.targets.r_sigma
+    if N_pivot is None:
+        N_pivot = DEFAULTS.N_pivot
+    if niterations is None:
+        niterations = DEFAULTS.search.niterations
+    if populations is None:
+        populations = DEFAULTS.search.populations
+    if maxsize is None:
+        maxsize = DEFAULTS.search.maxsize
+    if T_reh_GeV is None:
+        T_reh_GeV = DEFAULTS.T_reh_GeV
+    if egb_min_delta1 is None:
+        egb_min_delta1 = 1.0e-4
+    if out_dir is None:
+        out_dir = DEFAULTS.agent.runs_dir
 
     # Parse Ω_GW targets
     gw_target_tuples: list[tuple[float, float, float]] = []
@@ -203,10 +229,11 @@ def search(target_ns, sigma_ns, target_r, sigma_r,
 # ---------------------------------------------------------------------------
 @main.command()
 @click.argument("v_expr")
-@click.argument("xi_expr", default="0")
-@click.option("--N", "N_pivot", default=55.0, type=float)
-def analyze(v_expr: str, xi_expr: str, N_pivot: float) -> None:
-    """Analyze a single (V, ξ) model. Example:  deepegb analyze "phi**2" "0"."""
+@click.argument("xi_expr", default=None, required=False)
+@click.option("--N", "N_pivot", default=None, type=float,
+              help="Pivot e-folds. Omit to use self-consistent auto-N.")
+def analyze(v_expr: str, xi_expr: str | None, N_pivot: float | None) -> None:
+    """Analyze a single (V, ξ) model. Default ξ is nontrivial EGB coupling."""
     from rich import print_json
     from .analysis import analyze_egb_model
     out = analyze_egb_model(v_expr, xi_expr, N=N_pivot)
@@ -218,12 +245,13 @@ def analyze(v_expr: str, xi_expr: str, N_pivot: float) -> None:
 # ---------------------------------------------------------------------------
 @main.command()
 @click.argument("v_expr")
-@click.argument("xi_expr", default="0")
-@click.option("--N", "N_pivot", default=55.0, type=float)
+@click.argument("xi_expr", default=None, required=False)
+@click.option("--N", "N_pivot", default=None, type=float,
+              help="Pivot e-folds. Omit to use self-consistent auto-N.")
 @click.option("--out", "out_path", default="outputs/egb_diagnostic.png",
               type=click.Path())
-def plot(v_expr: str, xi_expr: str, N_pivot: float, out_path: str) -> None:
-    """Produce a 6-panel diagnostic plot for a single (V, ξ) model."""
+def plot(v_expr: str, xi_expr: str | None, N_pivot: float | None, out_path: str) -> None:
+    """Produce a 7-panel diagnostic plot for a single (V, ξ) model."""
     from .analysis import plot_egb_model
     p = plot_egb_model(v_expr, xi_expr, N=N_pivot, out_path=out_path)
     click.echo(f"Saved → {p}")
@@ -231,19 +259,19 @@ def plot(v_expr: str, xi_expr: str, N_pivot: float, out_path: str) -> None:
 
 @main.command(name="relic-gw")
 @click.argument("v_expr")
-@click.argument("xi_expr", default="0")
-@click.option("--N", "N_pivot", default=55.0, type=float,
-              help="Pivot e-folds before end of inflation.")
-@click.option("--decades", "n_decades", default=8.0, type=float,
+@click.argument("xi_expr", default=None, required=False)
+@click.option("--N", "N_pivot", default=None, type=float,
+              help="Pivot e-folds. Omit to use self-consistent auto-N.")
+@click.option("--decades", "n_decades", default=None, type=float,
               help="Number of decades of k around the pivot.")
-@click.option("--n-k", default=30, type=int,
+@click.option("--n-k", default=None, type=int,
               help="Number of k samples (more = slower but smoother).")
-@click.option("--T-reh", "T_reh_GeV", default=1.0e15, type=float,
+@click.option("--T-reh", "T_reh_GeV", default=None, type=float,
               help="Reheating temperature in GeV (controls g_* in transfer).")
 @click.option("--out", "out_path", default="outputs/relic_gw.png",
               type=click.Path())
-def relic_gw(v_expr: str, xi_expr: str, N_pivot: float,
-             n_decades: float, n_k: int, T_reh_GeV: float,
+def relic_gw(v_expr: str, xi_expr: str | None, N_pivot: float | None,
+             n_decades: float | None, n_k: int | None, T_reh_GeV: float | None,
              out_path: str) -> None:
     """Compute and plot the relic GW spectrum Ω_GW(f) h² for an EGB model.
 

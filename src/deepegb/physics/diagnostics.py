@@ -36,6 +36,7 @@ from typing import Any
 
 import numpy as np
 
+from ..config.defaults import DEFAULTS
 from .egb_slow_roll import EGBModel, _scan_epsilon, end_of_inflation
 
 
@@ -75,7 +76,7 @@ class Chi2Breakdown:
 def soft_invalid_penalty(
     model: EGBModel,
     *,
-    phi_range: tuple[float, float] = (-15.0, 15.0),
+    phi_range: tuple[float, float] | None = None,
     n_grid: int = 401,
     floor: float = 1.0e3,
 ) -> tuple[float, list[str]]:
@@ -90,6 +91,8 @@ def soft_invalid_penalty(
         but ε > 1 everywhere → +floor·(1 + min ε / 100).
       * NaN/inf in V, V', or Q at majority of sampled φ → +floor·5.
     """
+    if phi_range is None:
+        phi_range = DEFAULTS.phi_range
     phi = np.linspace(*phi_range, n_grid)
     reasons: list[str] = []
     penalty = floor
@@ -286,8 +289,8 @@ def chi2_omega_gw_breakdown(
 def diagnose_model(
     model: EGBModel,
     *,
-    N_pivot: float = 55.0,
-    phi_range: tuple[float, float] = (-15.0, 15.0),
+    N_pivot: float | None = None,
+    phi_range: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
     """A health-check of an EGB inflation model. Returns a dict the agent
     can read aloud to explain why a candidate isn't producing observables.
@@ -309,6 +312,10 @@ def diagnose_model(
         "suggestions": [str, ...],
     }
     """
+    if N_pivot is None:
+        N_pivot = DEFAULTS.N_pivot
+    if phi_range is None:
+        phi_range = DEFAULTS.phi_range
     from .egb_perturbations import (
         background_along,
         compute_observables_full,

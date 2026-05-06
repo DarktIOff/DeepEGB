@@ -220,8 +220,8 @@ def test_layer_9_analyze_tool_returns_full_observables():
                 "epsilon", "delta1", "phi_N", "phi_end"):
         assert key in out, f"missing {key}"
         assert np.isfinite(out[key])
-    # GR consistency relation
-    cons = out["consistency_r_minus_8nT"]
+    # GR consistency relation (EGB-aware metric)
+    cons = out["egb_consistency"]
     assert cons is not None and abs(cons - 1.0) < 0.05
 
 

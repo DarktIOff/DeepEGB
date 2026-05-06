@@ -5,6 +5,7 @@ Single production stack:
   - egb_background.py   Full Friedmann + KG ODE integration (solve_ivp)
   - egb_perturbations.py Slow-roll closed-form observables w/ full c_T², c_S²
   - egb_modes.py         Mukhanov-Sasaki mode integration (P_T, P_S exact)
+  - n_pivot.py           Self-consistent N_pivot computation (Liddle-Leach)
   - relic_gw.py          Ω_GW(f) h² with detector sensitivity overlay
   - detectors.py         Catalogue of GW experiments and their Ω_GW floors
 """
@@ -23,6 +24,7 @@ from .egb_perturbations import (
     compute_c_S2,
     compute_c_T2,
     compute_observables_full,
+    egb_consistency_metric,
     integrate_background_robust,
     power_spectra_at,
 )
@@ -43,6 +45,10 @@ from .egb_modes import (
     tensor_power_spectrum,
     scalar_power_spectrum,
     k_pivot_from_traj,
+)
+from .n_pivot import (
+    compute_N_pivot,
+    compute_N_pivot_from_model,
 )
 from .relic_gw import (
     GWSpectrum,
@@ -73,6 +79,7 @@ __all__ = [
     "compute_c_S2",
     "compute_c_T2",
     "compute_observables_full",
+    "egb_consistency_metric",
     "integrate_background_robust",
     "power_spectra_at",
     # Diagnostics
@@ -90,6 +97,9 @@ __all__ = [
     "tensor_power_spectrum",
     "scalar_power_spectrum",
     "k_pivot_from_traj",
+    # Self-consistent N_pivot (Liddle-Leach 2003, Martin-Ringeval 2010)
+    "compute_N_pivot",
+    "compute_N_pivot_from_model",
     # Relic GW spectrum
     "GWSpectrum",
     "relic_gw_spectrum",

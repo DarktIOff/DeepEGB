@@ -19,6 +19,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Optional
 
+from ..config.defaults import DEFAULTS
 from ..analysis import analyze_egb_model, analyze_egb_relic_gw, plot_egb_model
 from ..search import SearchConfig, run_joint_search, run_joint_search_subprocess
 
@@ -33,14 +34,14 @@ def _tool_error(category: str, msg: str, *, suggestion: str = "") -> str:
 
 
 def search_egb_potentials(
-    target_ns: float,
-    target_r: float,
-    sigma_ns: float = 0.003,
-    sigma_r: float = 0.05,
-    N_pivot: float = 55.0,
-    niterations: int = 30,
-    populations: int = 30,
-    maxsize: int = 25,
+    target_ns: float | None = None,
+    target_r: float | None = None,
+    sigma_ns: float | None = None,
+    sigma_r: float | None = None,
+    N_pivot: float | None = None,
+    niterations: int | None = None,
+    populations: int | None = None,
+    maxsize: int | None = None,
     enforce_egb: bool = True,
     runs_dir: str = "runs/agent",
 ) -> str:
@@ -71,6 +72,24 @@ def search_egb_potentials(
 
     def _log(msg: str) -> None:
         print(f"[DeepEGB] {msg}", file=sys.stderr, flush=True)
+
+    # Use centralized defaults where not specified
+    if target_ns is None:
+        target_ns = DEFAULTS.targets.ns
+    if target_r is None:
+        target_r = DEFAULTS.targets.r
+    if sigma_ns is None:
+        sigma_ns = DEFAULTS.targets.ns_sigma
+    if sigma_r is None:
+        sigma_r = DEFAULTS.targets.r_sigma
+    if N_pivot is None:
+        N_pivot = DEFAULTS.N_pivot
+    if niterations is None:
+        niterations = DEFAULTS.search.niterations
+    if populations is None:
+        populations = DEFAULTS.search.populations
+    if maxsize is None:
+        maxsize = DEFAULTS.search.maxsize
 
     _log(f"search_egb_potentials called: ns={target_ns}, r={target_r}")
     _log(f"stdout type={type(sys.stdout).__name__}, stderr type={type(sys.stderr).__name__}")
@@ -130,22 +149,24 @@ def search_egb_potentials(
 
 def analyze_egb_model_tool(
     V_expr: str,
-    xi_expr: str = "0",
-    N: float = 55.0,
+    xi_expr: str | None = None,
+    N: float | None = None,
 ) -> str:
     """Compute observables (n_s, n_T, r, α_s, P_S, P_T, c_T², c_S², ε, δ₁,
-    consistency_r_minus_8nT) for a given EGB inflation model.
+    EGB consistency metric) for a given EGB inflation model.
 
     Parameters
     ----------
     V_expr : Sympy-style string for V(φ). Example: "phi**2".
-    xi_expr: Sympy-style string for ξ(φ). Example: "0.1*exp(-0.5*phi)".
-    N      : e-folds before end of inflation. Default 55.
+    xi_expr: Sympy-style string for ξ(φ). Default: nontrivial EGB coupling.
+    N      : e-folds before end of inflation. Default from config.
 
     Returns
     -------
     JSON dict with all production observables, or TOOL_ERROR on failure.
     """
+    if xi_expr is None:
+        xi_expr = DEFAULTS.default_xi_expr
     try:
         return json.dumps(analyze_egb_model(V_expr, xi_expr, N=N),
                           indent=2, default=str)
@@ -160,12 +181,14 @@ def analyze_egb_model_tool(
 
 def plot_egb_model_tool(
     V_expr: str,
-    xi_expr: str = "0",
-    N: float = 55.0,
+    xi_expr: str | None = None,
+    N: float | None = None,
     out_path: str = "outputs/egb_diagnostic.png",
 ) -> str:
-    """Render a 6-panel diagnostic plot for an EGB inflation model and save
+    """Render a 7-panel diagnostic plot for an EGB inflation model and save
     it to disk. Returns the saved path as a string."""
+    if xi_expr is None:
+        xi_expr = DEFAULTS.default_xi_expr
     try:
         p = plot_egb_model(V_expr, xi_expr, N=N, out_path=out_path)
         return json.dumps({"saved_path": p})
@@ -181,11 +204,11 @@ def plot_egb_model_tool(
 
 def relic_gw_spectrum_tool(
     V_expr: str,
-    xi_expr: str = "0",
-    N: float = 55.0,
-    T_reh_GeV: float = 1.0e15,
-    n_decades: float = 10.0,
-    n_k: int = 24,
+    xi_expr: str | None = None,
+    N: float | None = None,
+    T_reh_GeV: float | None = None,
+    n_decades: float | None = None,
+    n_k: int | None = None,
 ) -> str:
     """Compute the relic GW energy density Ω_GW(f) h² across the relic-GW
     frequency band using full background EOMs + Mukhanov-Sasaki + a
@@ -194,12 +217,20 @@ def relic_gw_spectrum_tool(
     Parameters
     ----------
     V_expr     : V(φ) expression in `phi`.
-    xi_expr    : ξ(φ) expression. Pass "0" for the GR limit.
+    xi_expr    : ξ(φ) expression. Default: nontrivial EGB coupling.
     N          : pivot e-folds before end of inflation.
     T_reh_GeV  : reheating temperature in GeV (controls g_* in transfer).
-    n_decades  : log-decades of k around pivot.
+    n_decades  : log-decades of k around pivot. Default from config.
     n_k        : number of k samples (more = slower but smoother).
     """
+    if xi_expr is None:
+        xi_expr = DEFAULTS.default_xi_expr
+    if T_reh_GeV is None:
+        T_reh_GeV = DEFAULTS.T_reh_GeV
+    if n_decades is None:
+        n_decades = DEFAULTS.n_decades
+    if n_k is None:
+        n_k = DEFAULTS.n_k
     try:
         return json.dumps(
             analyze_egb_relic_gw(V_expr, xi_expr, N=N, n_decades=n_decades,
@@ -217,13 +248,13 @@ def relic_gw_spectrum_tool(
 
 def diagnose_egb_model_tool(
     V_expr: str,
-    xi_expr: str = "0",
+    xi_expr: str | None = None,
     *,
-    N: float = 55.0,
-    target_ns: float = 0.965,
-    target_r: float = 0.0,
-    sigma_ns: float = 0.005,
-    sigma_r: float = 0.018,
+    N: float | None = None,
+    target_ns: float | None = None,
+    target_r: float | None = None,
+    sigma_ns: float | None = None,
+    sigma_r: float | None = None,
 ) -> str:
     """Diagnose WHY an EGB inflation model is failing or producing odd
     observables. Returns a structured report with:
@@ -240,10 +271,20 @@ def diagnose_egb_model_tool(
 
     Parameters
     ----------
-    V_expr, xi_expr : Sympy strings in `phi`. Pass "0" for ξ to test GR.
+    V_expr, xi_expr : Sympy strings in `phi`.
     N               : Pivot e-folds before end of inflation.
     target_ns/r, sigma_ns/r : χ² targets to score against.
     """
+    if xi_expr is None:
+        xi_expr = DEFAULTS.default_xi_expr
+    if target_ns is None:
+        target_ns = 0.965
+    if target_r is None:
+        target_r = 0.0
+    if sigma_ns is None:
+        sigma_ns = 0.005
+    if sigma_r is None:
+        sigma_r = 0.018
     from ..physics import diagnose_model, chi2_full_with_breakdown
     from ..search.pysr_search import expressions_to_model
     try:

@@ -33,6 +33,8 @@ try:
     from pysr import PySRRegressor
 except ImportError:  # PySR may not be installed in lightweight environments
     PySRRegressor = None  # type: ignore
+except Exception:  # Julia init errors, network issues, etc.
+    PySRRegressor = None  # type: ignore
 
 
 # ---------------------------------------------------------------------------

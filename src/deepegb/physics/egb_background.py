@@ -298,13 +298,21 @@ def _slow_roll_phi_for_N(model: EGBModel, N_target: float,
 
 def integrate_with_pivot(
     model: EGBModel,
-    N_pivot: float = 55.0,
+    N_pivot: float | None = None,
     *,
     buffer: float = 5.0,
-    phi_range: tuple[float, float] = (-15.0, 15.0),
+    phi_range: tuple[float, float] | None = None,
 ) -> BackgroundTrajectory | None:
     """Integrate so that the trajectory contains at least N_pivot+buffer
-    e-folds of inflation, with the pivot crossing at N = N_end − N_pivot."""
+    e-folds of inflation, with the pivot crossing at N = N_end − N_pivot.
+
+    N_pivot and phi_range default to the centralized config values.
+    """
+    from ..config.defaults import DEFAULTS
+    if N_pivot is None:
+        N_pivot = DEFAULTS.N_pivot
+    if phi_range is None:
+        phi_range = DEFAULTS.phi_range
     phi_init = _slow_roll_phi_for_N(model, N_pivot + buffer, phi_range)
     if phi_init is None:
         return None

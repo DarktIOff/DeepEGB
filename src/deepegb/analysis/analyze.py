@@ -14,9 +14,12 @@ from typing import Any
 
 import numpy as np
 
+from ..config.defaults import DEFAULTS
 from ..physics import (
+    compute_N_pivot_from_model,
     compute_observables_full,
     diagnose_model,
+    egb_consistency_metric,
     integrate_background_robust,
     integrate_with_pivot,
     k_inflation_to_today_Mpc_inv,
@@ -28,12 +31,27 @@ from ..physics import (
 from ..search.pysr_search import expressions_to_model
 
 
+def _resolve_N_auto(model, N, phi_range, T_reh_GeV=None):
+    """Return (N_pivot, N_was_auto) after optional self-consistent computation."""
+    N_was_auto = N is None
+    if N is None:
+        kw = dict(
+            phi_range=phi_range,
+            N_min=DEFAULTS.physics.N_pivot_min,
+            N_max=DEFAULTS.physics.N_pivot_max,
+        )
+        if T_reh_GeV is not None:
+            kw["T_reh_GeV"] = T_reh_GeV
+        N = compute_N_pivot_from_model(model, **kw)
+    return float(N), N_was_auto
+
+
 def analyze_egb_model(
     V_expr: str,
-    xi_expr: str = "xi0/(phi0+phi)**2",
+    xi_expr: str | None = None,
     *,
-    N: float = 55.0,
-    phi_range: tuple[float, float] = (-15.0, 15.0),
+    N: float | None = None,
+    phi_range: tuple[float, float] | None = None,
     n_grid: int = 10001,
 ) -> dict[str, Any]:
     """Compute observables (n_s, n_T, r, α_s, P_S, P_T, c_T², c_S²) for an EGB
@@ -42,33 +60,41 @@ def analyze_egb_model(
     Parameters
     ----------
     V_expr    : V(φ) expression. Use ``phi`` as the field.
-    xi_expr   : ξ(φ) expression. Pass ``"0"`` for the GR limit.
+    xi_expr   : ξ(φ) expression. Default: nontrivial EGB coupling from config.
     N         : Number of e-folds before end of inflation at the pivot.
-    phi_range : Bracket for φ scanning.
+    phi_range : Bracket for φ scanning. Default from centralized config.
     n_grid    : Resolution of the φ scan.
     """
+    if xi_expr is None:
+        xi_expr = DEFAULTS.default_xi_expr
+    if phi_range is None:
+        phi_range = DEFAULTS.phi_range
     model = expressions_to_model(V_expr, xi_expr)
+    N, N_was_auto = _resolve_N_auto(model, N, phi_range)
     full = compute_observables_full(model, N_pivot=N, phi_range=phi_range, n_grid=n_grid)
+    cons_metric = egb_consistency_metric(full)
     return {
-        "V_expr": V_expr, "xi_expr": xi_expr, "N": N,
+        "V_expr": V_expr, "xi_expr": xi_expr, "N_pivot": N,
+        "N_was_auto": N_was_auto,
         "method": "production",
         **full.as_dict(),
         "valid": full.is_valid,
-        # convenience derived quantities:
+        "egb_consistency": cons_metric["egb_consistency"],
+        "c_T2_deviation": cons_metric["c_T2_deviation"],
+        "delta1_magnitude": cons_metric["delta1_magnitude"],
         "ln10_As": float(__import__("math").log(1e10 * full.P_S)) if full.P_S > 0 else None,
-        "consistency_r_minus_8nT": (full.r / (-8 * full.n_T)) if full.n_T not in (0.0,) and full.n_T == full.n_T else None,
     }
 
 
 def analyze_egb_relic_gw(
     V_expr: str,
-    xi_expr: str = "xi0/(phi0+phi)**2",
+    xi_expr: str | None = None,
     *,
-    N: float = 55.0,
-    n_decades: float = 6.0,
-    n_k: int = 24,
-    T_reh_GeV: float | None = 1.0e15,
-    phi_range: tuple[float, float] = (-15.0, 15.0),
+    N: float | None = None,
+    n_decades: float | None = None,
+    n_k: int | None = None,
+    T_reh_GeV: float | None = None,
+    phi_range: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
     """Compute the relic GW spectrum Ω_GW(f) h² for an EGB model.
 
@@ -80,10 +106,27 @@ def analyze_egb_relic_gw(
       4. Apply the radiation/matter-domination transfer function and
          convert k → today's frequency (Hz).
 
+    n_decades and n_k policy: defaults come from the centralized config.
+    n_decades=8 covers the LISA–DECIGO band (Watanabe & Komatsu 2006,
+    astro-ph/0604176); 10 gives the full RD+MD transition.
+    T_reh_GeV controls the g_* thermal correction in the transfer function
+    (Kuroyanagi et al. 2015, arXiv:1407.4785).
+
     Returns a dict with arrays for k, P_T(k), Ω_GW h²(k), 𝒯²(k), and
     f_today (Hz).
     """
+    if xi_expr is None:
+        xi_expr = DEFAULTS.default_xi_expr
+    if phi_range is None:
+        phi_range = DEFAULTS.phi_range
+    if n_decades is None:
+        n_decades = DEFAULTS.n_decades
+    if n_k is None:
+        n_k = DEFAULTS.n_k
+    if T_reh_GeV is None:
+        T_reh_GeV = DEFAULTS.T_reh_GeV
     model = expressions_to_model(V_expr, xi_expr)
+    N, N_was_auto = _resolve_N_auto(model, N, phi_range, T_reh_GeV=T_reh_GeV)
     obs = compute_observables_full(model, N_pivot=N, phi_range=phi_range)
     traj, ladder_log = integrate_background_robust(
         model, N_pivot=N, phi_range=phi_range,
@@ -106,6 +149,7 @@ def analyze_egb_relic_gw(
         "V_expr": V_expr,
         "xi_expr": xi_expr,
         "N_pivot": N,
+        "N_was_auto": N_was_auto,
         "T_reh_GeV": T_reh_GeV,
         "k_inflation": k_arr.tolist(),
         "k_today_Mpc_inv": k_inflation_to_today_Mpc_inv(

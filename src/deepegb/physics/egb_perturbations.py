@@ -1,9 +1,30 @@
 """
 Production-grade EGB inflation observables.
 
-This module replaces the leading-order toy in `egb_slow_roll.py` with a
-careful slow-roll perturbation calculation that includes:
+This module provides the main observable-computation pipeline for EGB
+inflation.  Starting with the v2 refactor, **the primary (exact) path**
+solves the full Friedmann–Klein–Gordon ODE system to obtain the background
+trajectory, then computes tensor and scalar power spectra via Mukhanov–
+Sasaki mode integration.  Spectral indices and running are derived from
+finite differences of the mode-computed P(k) in ln k.
 
+If the full-background integration fails (stiff ODE, no trajectory, etc.),
+a **fallback (slow-roll)** path computes observables from the slow-roll
+truncation of the background using V/Q quadrature for the pivot location
+and numerical N-derivatives for spectral indices.
+
+Primary (exact) path
+--------------------
+  1. `integrate_with_pivot` solves the full ODE for the background
+     trajectory (Friedmann constraint + Klein–Gordon equation).
+  2. `k_pivot_from_traj` locates the comoving pivot wavenumber.
+  3. `tensor_power_spectrum` and `scalar_power_spectrum` integrate the
+     canonical Mukhanov–Sasaki mode equation for each k.
+  4. n_s, n_T, α_s are computed from finite differences of ln P in ln k
+     at k = k_* · exp(±dlnk).
+
+Fallback (slow-roll) path
+-------------------------
   * The GB-corrected slow-roll parameters ε₁, η, δ_1, δ_2.
   * The tensor sound speed  c_T²(φ) = F_T/G_T  with the explicit forms
     F_T = M_pl² (1 − 4 ξ̈/M_pl²),   G_T = M_pl² (1 − 4 ξ̇H/M_pl²)
@@ -13,9 +34,7 @@ careful slow-roll perturbation calculation that includes:
   * The scalar power spectrum  P_S = H²/(8 π² M_pl² ε)  with the GB-
     corrected ε (Koh-Lee-Tumurtushaa 2014; Yi-Gong-Sabir 2018).
   * Spectral indices n_s, n_T computed as **numerical N-derivatives** of
-    ln P_S, ln P_T along the inflationary trajectory — this captures all
-    O(slow-roll²) corrections automatically and is what we mean by
-    "production grade" here.
+    ln P_S, ln P_T along the inflationary trajectory.
   * The running α_s = dn_s/dlnk.
   * The tensor-to-scalar ratio r = P_T/P_S (no longer simply 16ε).
 
@@ -57,6 +76,8 @@ References
 * Odintsov S.D., Oikonomou V.K., *Viable Inflation in Scalar-Gauss-Bonnet
   Gravity and Reconstruction from Observational Indices*,
   arXiv:1810.04645 (2018).        — denoted OO
+* Mukhanov V.F., Feldman H.A., Brandenberger R.H., *Theory of cosmological
+  perturbations*, Phys. Rep. 215 (1992) 203.   — MS mode integration
 """
 from __future__ import annotations
 
@@ -297,6 +318,7 @@ class FullObservables:
     phi_N: float
     phi_end: float
     N_pivot: float
+    egb_consistency: float = float("nan")  # r/(-8nT); EGB-aware metric
 
     @property
     def is_valid(self) -> bool:
@@ -337,30 +359,191 @@ def _bracket_phi_for_N(
     return float(candidates[0])
 
 
+# ---------------------------------------------------------------------------
+# Primary path: full-background trajectory + Mukhanov–Sasaki mode integration
+# ---------------------------------------------------------------------------
+def _observables_from_trajectory(
+    model: EGBModel,
+    N_pivot: float,
+    phi_range: tuple[float, float],
+    dlnk: float,
+) -> FullObservables | None:
+    """Attempt exact observables from full-background + mode integration.
+
+    This is the **primary (exact) path** for ``compute_observables_full``.
+    It solves the full Friedmann–Klein–Gordon ODE to obtain the background
+    trajectory via ``integrate_with_pivot``, then computes tensor and scalar
+    power spectra using Mukhanov–Sasaki mode integration at the pivot scale
+    and at k = k_* · exp(±dlnk).  Spectral indices n_s, n_T and running α_s
+    are derived from finite differences of ln P in ln k.
+
+    Returns ``None`` if the trajectory integration fails, the pivot point is
+    not contained in the trajectory, or the mode spectra contain non-finite /
+    non-positive values.  The caller should fall back to the slow-roll path.
+
+    Parameters
+    ----------
+    model : EGBModel
+        The inflation model (V, ξ, derivatives).
+    N_pivot : float
+        Number of e-folds before end of inflation at the pivot scale.
+    phi_range : tuple[float, float]
+        Field-value range for the background integration.
+    dlnk : float
+        Step size in ln k for finite-difference spectral indices.
+
+    References
+    ----------
+    * Mukhanov, Feldman & Brandenberger, Phys. Rep. 215 (1992) 203.
+    * Hwang & Noh, gr-qc/0507025 (2005).
+    """
+    # Local imports to avoid circular dependency:
+    # egb_perturbations ← egb_modes ← egb_perturbations
+    from .egb_background import integrate_with_pivot
+    from .egb_modes import (k_pivot_from_traj, scalar_power_spectrum,
+                             tensor_power_spectrum)
+
+    traj = integrate_with_pivot(model, N_pivot=N_pivot, phi_range=phi_range)
+    if traj is None or traj.N_end <= N_pivot:
+        return None
+
+    k_pivot = k_pivot_from_traj(traj, N_pivot=N_pivot)
+    if not (np.isfinite(k_pivot) and k_pivot > 0):
+        return None
+
+    # k values for finite-difference spectral indices
+    k_lo = k_pivot * np.exp(-dlnk)
+    k_hi = k_pivot * np.exp(dlnk)
+    k_arr = np.array([k_lo, k_pivot, k_hi])
+
+    # Power spectra via Mukhanov–Sasaki mode integration
+    P_T_arr, _ = tensor_power_spectrum(model, k_arr, traj=traj,
+                                        N_pivot=N_pivot)
+    P_S_arr, _ = scalar_power_spectrum(model, k_arr, traj=traj,
+                                        N_pivot=N_pivot)
+
+    if not (np.all(np.isfinite(P_T_arr)) and np.all(np.isfinite(P_S_arr))):
+        return None
+    if not (np.all(P_T_arr > 0) and np.all(P_S_arr > 0)):
+        return None
+
+    # Spectral indices from finite differences in ln k
+    ln_PT = np.log(P_T_arr)
+    ln_PS = np.log(P_S_arr)
+    n_T = float((ln_PT[2] - ln_PT[0]) / (2.0 * dlnk))
+    n_s = float(1.0 + (ln_PS[2] - ln_PS[0]) / (2.0 * dlnk))
+    alpha_s = float(
+        (ln_PS[2] - 2.0 * ln_PS[1] + ln_PS[0]) / (dlnk ** 2)
+    )
+
+    r = float(P_T_arr[1] / P_S_arr[1])
+
+    # Background quantities from trajectory interpolation at pivot
+    pivot_idx = int(np.argmin(np.abs(traj.N - (traj.N_end - N_pivot))))
+    H_pivot = float(traj.H[pivot_idx])
+    eps1_pivot = float(traj.eps1[pivot_idx])
+    delta1_pivot = float(traj.delta1[pivot_idx])
+    phi_pivot = float(traj.phi[pivot_idx])
+    phi_end = float(traj.phi_end)
+
+    # Sound speeds (slow-roll approximation for c_T², c_S² fields;
+    # the exact physics is captured by the mode integrators)
+    cT2 = compute_c_T2(model, phi_pivot, eps=eps1_pivot, delta1=delta1_pivot)
+    cS2 = compute_c_S2(model, phi_pivot)
+
+    # EGB consistency metric: r / (-8 n_T); deviates from 1 in EGB
+    if np.isfinite(n_T) and n_T != 0.0:
+        egb_cons = r / (-8.0 * n_T)
+    else:
+        egb_cons = float("nan")
+
+    return FullObservables(
+        n_s=n_s, n_T=n_T, r=r, alpha_s=alpha_s,
+        P_S=float(P_S_arr[1]), P_T=float(P_T_arr[1]),
+        c_T2=float(cT2) if np.isfinite(cT2) else float("nan"),
+        c_S2=float(cS2) if np.isfinite(cS2) else float("nan"),
+        epsilon=eps1_pivot, delta1=delta1_pivot,
+        H_pivot=H_pivot, phi_N=phi_pivot, phi_end=phi_end,
+        N_pivot=N_pivot, egb_consistency=egb_cons,
+    )
+
+
 def compute_observables_full(
     model: EGBModel,
-    N_pivot: float = 55.0,
-    phi_range: tuple[float, float] = (-15.0, 15.0),
+    N_pivot: float | None = None,
+    phi_range: tuple[float, float] | None = None,
     n_grid: int = 4001,
     dN_for_running: float = 0.5,
+    dlnk: float = 0.5,
 ) -> FullObservables:
     """Compute production-grade observables for an EGB inflation model.
 
-    Workflow:
+    Defaults for N_pivot and phi_range come from the centralized config
+    (deepegb.config.defaults.DEFAULTS).
+
+    Primary (exact) path
+    --------------------
+    Solve the full Friedmann–Klein–Gordon ODE via ``integrate_with_pivot``
+    to obtain the background trajectory.  Then compute P_T(k) and P_S(k)
+    using Mukhanov–Sasaki mode integration at the pivot scale k_* and at
+    k_* · exp(±dlnk).  Spectral indices n_s, n_T and running α_s are
+    derived from finite differences of ln P in ln k.  This captures all
+    non-slow-roll corrections to the perturbation spectra.
+
+    Fallback (slow-roll) path
+    -------------------------
+    If the full-background integration fails — stiff ODE, trajectory too
+    short, mode spectra non-finite — the function falls back to the slow-
+    roll closed-form computation:
+
       1. Find φ_end from ε(φ_end) = 1.
       2. Find φ_pivot N e-folds before end (from V/Q quadrature).
       3. Compute background quantities, c_T², P_S, P_T at φ_pivot.
       4. Compute n_s, n_T as numerical N-derivatives of ln P_S, ln P_T
          using a small ΔN step on either side of φ_pivot.
       5. Compute α_s = dn_s/dlnk likewise (second derivative of ln P_S).
+
+    Parameters
+    ----------
+    dlnk : float
+        Step size in ln k for finite-difference spectral indices in the
+        primary (mode-integration) path.  Default 0.5.
     """
+    from ..config.defaults import DEFAULTS
+    if N_pivot is None:
+        N_pivot = DEFAULTS.N_pivot
+    if phi_range is None:
+        phi_range = DEFAULTS.phi_range
+
+    # ── Primary (exact) path: full-background ODE + Mukhanov–Sasaki ──
+    try:
+        primary = _observables_from_trajectory(
+            model, N_pivot, phi_range, dlnk)
+        if primary is not None:
+            return primary
+    except Exception:
+        pass  # fall through to slow-roll fallback
+
+    # ── Fallback: slow-roll closed-form ──
     phi_end = end_of_inflation(model, phi_range=phi_range, n_grid=n_grid)
     if phi_end is None:
-        return FullObservables(*([np.nan] * 13), N_pivot=N_pivot)
+        return FullObservables(
+            n_s=np.nan, n_T=np.nan, r=np.nan, alpha_s=np.nan,
+            P_S=np.nan, P_T=np.nan, c_T2=np.nan, c_S2=np.nan,
+            epsilon=np.nan, delta1=np.nan, H_pivot=np.nan,
+            phi_N=np.nan, phi_end=np.nan, N_pivot=N_pivot,
+            egb_consistency=np.nan,
+        )
 
     phi_N = _bracket_phi_for_N(model, phi_end, N_pivot, phi_range, n_grid)
     if phi_N is None:
-        return FullObservables(*([np.nan] * 12), phi_end=phi_end, N_pivot=N_pivot)
+        return FullObservables(
+            n_s=np.nan, n_T=np.nan, r=np.nan, alpha_s=np.nan,
+            P_S=np.nan, P_T=np.nan, c_T2=np.nan, c_S2=np.nan,
+            epsilon=np.nan, delta1=np.nan, H_pivot=np.nan,
+            phi_N=np.nan, phi_end=phi_end, N_pivot=N_pivot,
+            egb_consistency=np.nan,
+        )
 
     # Background at pivot
     bg = background_at(model, phi_N)
@@ -370,7 +553,8 @@ def compute_observables_full(
                                spec["P_S"], spec["P_T"],
                                spec["c_T2"], spec["c_S2"],
                                bg["eps"], bg["delta1"], bg["H"],
-                               phi_N, phi_end, N_pivot)
+                               phi_N, phi_end, N_pivot,
+                               egb_consistency=float("nan"))
 
     # Find φ values dN_for_running e-folds either side of pivot
     phi_lo = _bracket_phi_for_N(model, phi_end,
@@ -385,12 +569,20 @@ def compute_observables_full(
         n_s_lo = 1.0 - 2.0 * eps - 2.0 * eta + 2.0 * d1   # KLT-like leading order
         n_T_lo = -2.0 * eps - d1                          # KLT, YGS leading order
         r_val = spec["P_T"] / spec["P_S"]
+
+        # EGB consistency in fallback branch
+        if np.isfinite(n_T_lo) and n_T_lo != 0.0:
+            egb_cons_lo = r_val / (-8.0 * n_T_lo)
+        else:
+            egb_cons_lo = float("nan")
+
         return FullObservables(
             n_s=n_s_lo, n_T=n_T_lo, r=r_val, alpha_s=np.nan,
             P_S=spec["P_S"], P_T=spec["P_T"],
             c_T2=spec["c_T2"], c_S2=spec["c_S2"],
             epsilon=eps, delta1=d1, H_pivot=bg["H"],
             phi_N=phi_N, phi_end=phi_end, N_pivot=N_pivot,
+            egb_consistency=egb_cons_lo,
         )
 
     spec_lo = power_spectra_at(model, phi_lo)
@@ -424,12 +616,21 @@ def compute_observables_full(
 
     r_val = spec["P_T"] / spec["P_S"]
 
+    # EGB-aware consistency metric: in GR, r = -8 n_T; in EGB this
+    # is broken by δ₁ and c_T² corrections. We report the deviation
+    # from unity as the EGB consistency ratio.
+    if np.isfinite(n_T) and n_T != 0.0:
+        egb_cons = r_val / (-8.0 * n_T)
+    else:
+        egb_cons = float("nan")
+
     return FullObservables(
         n_s=n_s, n_T=n_T, r=r_val, alpha_s=alpha_s,
         P_S=spec["P_S"], P_T=spec["P_T"],
         c_T2=spec["c_T2"], c_S2=spec["c_S2"],
         epsilon=bg["eps"], delta1=bg["delta1"], H_pivot=bg["H"],
         phi_N=phi_N, phi_end=phi_end, N_pivot=N_pivot,
+        egb_consistency=egb_cons,
     )
 
 
@@ -530,16 +731,23 @@ def chi2_full_with_breakdown(
 def integrate_background_robust(
     model: "EGBModel",
     *,
-    N_pivot: float = 55.0,
-    phi_range: tuple[float, float] = (-15.0, 15.0),
+    N_pivot: float | None = None,
+    phi_range: tuple[float, float] | None = None,
     obs: "FullObservables | None" = None,
 ):
     """Try a ladder of φ-ranges / tolerances until the full background ODE
     converges. Returns (traj, log_lines) where traj is `None` only if
     every ladder step failed.
+
+    Defaults from centralized config.
     """
+    from ..config.defaults import DEFAULTS
     from .egb_background import integrate_background, integrate_with_pivot
 
+    if N_pivot is None:
+        N_pivot = DEFAULTS.N_pivot
+    if phi_range is None:
+        phi_range = DEFAULTS.phi_range
     log: list[str] = []
     # Step 1: pivot-aware default
     traj = integrate_with_pivot(model, N_pivot=N_pivot, phi_range=phi_range)
@@ -766,3 +974,40 @@ def chi2_relic_gw_with_breakdown(
     total = float(sum(components.values()))
     return Chi2Breakdown(total=total, components=components,
                          reasons=reasons, is_valid=True)
+
+
+# ---------------------------------------------------------------------------
+# EGB-aware consistency metric
+# ---------------------------------------------------------------------------
+def egb_consistency_metric(obs: FullObservables) -> dict[str, float]:
+    """Compute the EGB-aware consistency metric replacing the GR-only r/(-8nT).
+
+    In pure GR, the single-field consistency relation is r = -8 n_T.
+    In EGB inflation, this is modified by the Gauss-Bonnet coupling:
+    the tensor sound speed c_T² ≠ 1 and δ₁ ≠ 0 break the simple relation.
+
+    We report:
+      * ``egb_consistency``: r / (-8 n_T) — equals 1 in GR, deviates in EGB.
+      * ``c_T2_deviation``: 1 - c_T² — measures how far tensor propagation
+        deviates from luminal.
+      * ``delta1_magnitude``: |δ₁| — measures the strength of the GB coupling
+        at horizon crossing.
+
+    References
+    ----------
+    * GR limit: Liddle & Lyth, *The Primordial Density Perturbation*
+      (Cambridge, 2009), Eq. (7.37).
+    * EGB breaking: Kawai & Soda 1999 (gr-qc/9901002);
+      Hwang & Noh 2005 (gr-qc/0507025).
+    """
+    out: dict[str, float] = {
+        "c_T2_deviation": float("nan"),
+        "delta1_magnitude": float("nan"),
+        "egb_consistency": float("nan"),
+    }
+    if obs.is_valid:
+        out["c_T2_deviation"] = 1.0 - obs.c_T2
+        out["delta1_magnitude"] = abs(obs.delta1)
+        if np.isfinite(obs.n_T) and obs.n_T != 0.0:
+            out["egb_consistency"] = obs.r / (-8.0 * obs.n_T)
+    return out
