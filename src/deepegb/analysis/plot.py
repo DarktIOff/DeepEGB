@@ -28,6 +28,7 @@ from ..physics import (
     compute_c_T2,
     compute_observables_full,
     egb_consistency_metric,
+    integrate_background_robust,
     integrate_with_pivot,
     k_inflation_to_today_Mpc_inv,
     k_pivot_from_traj,
@@ -60,7 +61,7 @@ def plot_egb_model(
     phi_range: tuple[float, float] | None = None,
     title: str | None = None,
     n_decades_gw: float | None = None,
-    n_k_gw: int = 20,
+    n_k_gw: int | None = None,
     T_reh_GeV: float | None = None,
 ) -> str:
     """Render a 7-panel diagnostic plot (6 physics + 1 GW spectrum).
@@ -71,6 +72,8 @@ def plot_egb_model(
         phi_range = DEFAULTS.phi_range
     if n_decades_gw is None:
         n_decades_gw = DEFAULTS.n_decades
+    if n_k_gw is None:
+        n_k_gw = DEFAULTS.n_k
     if T_reh_GeV is None:
         T_reh_GeV = DEFAULTS.T_reh_GeV
 
@@ -168,13 +171,19 @@ def plot_egb_model(
     p.legend(fontsize=7, loc="lower right"); p.grid(alpha=0.25, which="both")
 
     # 7: Relic GW spectrum panel
-    traj = integrate_with_pivot(model, N_pivot=N, phi_range=phi_range)
-    if traj is not None:
+    traj, _gw_ladder_log = integrate_background_robust(model, N_pivot=N, phi_range=phi_range, obs=obs if obs.is_valid else None)
+    if traj is None:
+        ax_gw.text(0.5, 0.5, "background integration failed — no GW panel",
+                   transform=ax_gw.transAxes, ha="center", va="center", color="red")
+    else:
         k_pivot = k_pivot_from_traj(traj, N_pivot=N)
         k_arr_gw = k_pivot * np.logspace(-n_decades_gw / 2, n_decades_gw / 2, n_k_gw)
         spec = relic_gw_spectrum(model, k_arr_gw, traj=traj, N_pivot=N,
                                  T_reh_GeV=T_reh_GeV)
-        if spec.f_today is not None:
+        if spec.f_today is None or not np.isfinite(spec.Omega_GW_h2).any() or not (spec.Omega_GW_h2 > 0).any():
+            ax_gw.text(0.5, 0.5, "GW spectrum integration failed — no finite Ω_GW values",
+                       transform=ax_gw.transAxes, ha="center", va="center", color="red")
+        else:
             gw_valid = np.isfinite(spec.Omega_GW_h2) & (spec.Omega_GW_h2 > 0)
             if gw_valid.any():
                 ax_gw.loglog(spec.f_today[gw_valid], spec.Omega_GW_h2[gw_valid],
@@ -187,23 +196,23 @@ def plot_egb_model(
         else:
             f_min_gw, f_max_gw = 1e-19, 1e4
         f_grid = np.logspace(np.log10(f_min_gw), np.log10(f_max_gw), 400)
+        legend_handles = []
         for d in DETECTORS[:8]:  # top detectors for readability
             sens = d.sensitivity(f_grid)
             finite = np.isfinite(sens) & (sens < 1e-3)
             if not finite.any():
                 continue
-            ax_gw.plot(f_grid[finite], sens[finite],
-                       color=PROBE_COLORS.get(d.probe, "grey"),
-                       ls=ERA_LINESTYLES.get(d.era, "-"),
-                       lw=1.0, alpha=0.6, label=d.name)
-    else:
-        ax_gw.text(0.5, 0.5, "background integration failed — no GW panel",
-                   transform=ax_gw.transAxes, ha="center", va="center", color="red")
+            line = ax_gw.plot(f_grid[finite], sens[finite],
+                              color=PROBE_COLORS.get(d.probe, "grey"),
+                              ls=ERA_LINESTYLES.get(d.era, "-"),
+                              lw=1.0, alpha=0.6, label=d.name)[0]
+            legend_handles.append(line)
+        if legend_handles or (spec.f_today is not None and gw_valid.any() if 'gw_valid' in locals() else False):
+            ax_gw.legend(loc="upper right", fontsize=6, ncol=3, framealpha=0.85)
     ax_gw.set_xlabel(r"$f$ today  [Hz]")
     ax_gw.set_ylabel(r"$\Omega_{\rm GW}\,h^2$")
     ax_gw.grid(alpha=0.25, which="both")
     ax_gw.set_ylim(1e-22, 1e-3)
-    ax_gw.legend(loc="upper right", fontsize=6, ncol=3, framealpha=0.85)
     ax_gw.set_title("Relic GW spectrum + detector sensitivities")
 
     fig.tight_layout(rect=(0, 0, 1, 0.96))
@@ -265,13 +274,17 @@ def plot_relic_gw_spectrum(
 
     model = expressions_to_model(V_expr, xi_expr)
     N, N_was_auto = _resolve_N_auto(model, N, phi_range, T_reh_GeV=T_reh_GeV)
-    traj = integrate_with_pivot(model, N_pivot=N, phi_range=phi_range)
+    traj, _gw_ladder_log = integrate_background_robust(model, N_pivot=N, phi_range=phi_range, obs=compute_observables_full(model, N_pivot=N, phi_range=phi_range, n_grid=4001) if N is not None else None)
     if traj is None:
         raise RuntimeError("background integration failed for relic-GW plot")
 
     k_pivot = k_pivot_from_traj(traj, N_pivot=N)
     k_arr = k_pivot * np.logspace(-n_decades / 2, n_decades / 2, n_k)
     spec = relic_gw_spectrum(model, k_arr, traj=traj, N_pivot=N, T_reh_GeV=T_reh_GeV)
+    
+    # Check if spectrum has any finite positive values
+    if spec.f_today is None or not np.isfinite(spec.Omega_GW_h2).any() or not (spec.Omega_GW_h2 > 0).any():
+        raise RuntimeError("relic GW spectrum produced no finite positive Ω_GW values")
 
     fig, ax = plt.subplots(1, 1, figsize=(13, 7))
 
@@ -312,7 +325,28 @@ def plot_relic_gw_spectrum(
     ax.grid(alpha=0.25, which="both")
     ax.set_xlim(f_min, f_max)
     ax.set_ylim(1e-22, 1e-3)
-    ax.legend(loc="upper right", fontsize=7, ncol=2, framealpha=0.85)
+    
+    # Only add legend if there are handles
+    legend_handles = []
+    if spec.f_today is not None:
+        valid = np.isfinite(spec.Omega_GW_h2) & (spec.Omega_GW_h2 > 0)
+        if valid.any():
+            legend_handles.append(None)  # Marker for the main spectrum
+    # Check if any detector lines would be added
+    for d in DETECTORS:
+        if d.era not in show_eras:
+            continue
+        if detector_set is not None and d.name not in detector_set:
+            continue
+        sens = d.sensitivity(f_grid)
+        finite = np.isfinite(sens)
+        if finite.any():
+            legend_handles.append(None)  # Marker for detector lines
+            break
+    
+    if legend_handles:
+        ax.legend(loc="upper right", fontsize=7, ncol=2, framealpha=0.85)
+    
     _title = title or f"Relic GW spectrum:  V={V_expr},  ξ={xi_expr},  T_reh={T_reh_GeV} GeV"
     if N_was_auto:
         _title += f"    [auto N_pivot={N:.2f}]"

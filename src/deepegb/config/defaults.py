@@ -188,8 +188,8 @@ def _build_defaults(raw: dict[str, Any]) -> Defaults:
             r_sigma=float(tg.get("r_sigma", 0.013)),
         ),
         gw=_GWDefaults(
-            n_decades=float(gw.get("n_decades", 8.0)),
-            n_k=int(gw.get("n_k", 30)),
+            n_decades=float(gw.get("n_decades", 30.0)),
+            n_k=int(gw.get("n_k", 256)),
             T_reh_GeV=float(gw.get("T_reh_GeV", 1e15)),
             sub_horizon_factor=float(gw.get("sub_horizon_factor", 50.0)),
         ),

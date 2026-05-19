@@ -107,8 +107,9 @@ def analyze_egb_relic_gw(
          convert k → today's frequency (Hz).
 
     n_decades and n_k policy: defaults come from the centralized config.
-    n_decades=8 covers the LISA–DECIGO band (Watanabe & Komatsu 2006,
-    astro-ph/0604176); 10 gives the full RD+MD transition.
+    The CMB pivot maps to a present-day frequency of order 3e-17 Hz, so
+    PTA/LISA coverage needs tens of decades around k_pivot; the default
+    therefore uses a broad range rather than a narrow inflation-only band.
     T_reh_GeV controls the g_* thermal correction in the transfer function
     (Kuroyanagi et al. 2015, arXiv:1407.4785).
 

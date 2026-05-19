@@ -382,7 +382,7 @@ function deepegb_v_loss_with_xi(tree, dataset::Dataset{{T,L}}, options) where {{
     if enforce_egb
         delta1 = -T(4/3) * xip[pivot_idx] * Q_pivot
         d1abs  = abs(delta1)
-        chi2 += T(1.0e3) * exp(-d1abs / max(egb_min, T(1e-30)))
+        chi2 += T(2.0e3) * exp(-d1abs / max(T(0.5) * egb_min, T(1e-30)))
     end
 
     return L(chi2)
@@ -557,7 +557,7 @@ function deepegb_xi_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
     if enforce_egb
         delta1 = -T(4/3) * xip[pivot_idx] * Q_pivot
         d1abs  = abs(delta1)
-        chi2 += T(1.0e3) * exp(-d1abs / max(egb_min, T(1e-30)))
+        chi2 += T(2.0e3) * exp(-d1abs / max(T(0.5) * egb_min, T(1e-30)))
     end
 
     return L(chi2)
@@ -738,39 +738,41 @@ def chi2_for_expressions(
 ) -> float:
     """Evaluate χ² for a (V, ξ) expression pair using the production kernel."""
     try:
-        model = expressions_to_model(V_expr, xi_expr)
-        if cfg.loss_kind == "production_gw":
-            return chi2_relic_gw(
+        with np.errstate(divide="ignore", invalid="ignore",
+                         over="ignore", under="ignore"):
+            model = expressions_to_model(V_expr, xi_expr)
+            if cfg.loss_kind == "production_gw":
+                return chi2_relic_gw(
+                    model,
+                    target_ns=cfg.target_ns, sigma_ns=cfg.sigma_ns,
+                    target_r=cfg.target_r, sigma_r=cfg.sigma_r,
+                    target_lnAs=cfg.target_lnAs, sigma_lnAs=cfg.sigma_lnAs,
+                    omega_gw_targets=list(cfg.omega_gw_targets) or None,
+                    omega_gw_band_min=cfg.omega_gw_band_min,
+                    N_pivot=cfg.N_pivot,
+                    T_reh_GeV=cfg.T_reh_GeV,
+                    enforce_egb=cfg.enforce_egb,
+                    egb_min_delta1=cfg.egb_min_delta1,
+                )
+            # production (default): slow-roll closed-form with full perturbations
+            obs_full = compute_observables_full(
                 model,
+                N_pivot=cfg.N_pivot,
+                phi_range=cfg.phi_search_range,
+                n_grid=cfg.phi_search_grid,
+            )
+            return chi2_full(
+                obs_full,
                 target_ns=cfg.target_ns, sigma_ns=cfg.sigma_ns,
                 target_r=cfg.target_r, sigma_r=cfg.sigma_r,
                 target_lnAs=cfg.target_lnAs, sigma_lnAs=cfg.sigma_lnAs,
-                omega_gw_targets=list(cfg.omega_gw_targets) or None,
-                omega_gw_band_min=cfg.omega_gw_band_min,
-                N_pivot=cfg.N_pivot,
-                T_reh_GeV=cfg.T_reh_GeV,
+                target_alphas=cfg.target_alphas, sigma_alphas=cfg.sigma_alphas,
+                target_nT=cfg.target_nT, sigma_nT=cfg.sigma_nT,
+                target_cT2=cfg.target_cT2, sigma_cT2=cfg.sigma_cT2,
+                model=model,    # enables soft-invalid penalty for NaN cases
                 enforce_egb=cfg.enforce_egb,
                 egb_min_delta1=cfg.egb_min_delta1,
             )
-        # production (default): slow-roll closed-form with full perturbations
-        obs_full = compute_observables_full(
-            model,
-            N_pivot=cfg.N_pivot,
-            phi_range=cfg.phi_search_range,
-            n_grid=cfg.phi_search_grid,
-        )
-        return chi2_full(
-            obs_full,
-            target_ns=cfg.target_ns, sigma_ns=cfg.sigma_ns,
-            target_r=cfg.target_r, sigma_r=cfg.sigma_r,
-            target_lnAs=cfg.target_lnAs, sigma_lnAs=cfg.sigma_lnAs,
-            target_alphas=cfg.target_alphas, sigma_alphas=cfg.sigma_alphas,
-            target_nT=cfg.target_nT, sigma_nT=cfg.sigma_nT,
-            target_cT2=cfg.target_cT2, sigma_cT2=cfg.sigma_cT2,
-            model=model,    # enables soft-invalid penalty for NaN cases
-            enforce_egb=cfg.enforce_egb,
-            egb_min_delta1=cfg.egb_min_delta1,
-        )
     except Exception:
         return 1.0e6
 
@@ -779,12 +781,14 @@ def observables_for_result(V_expr: str, xi_expr: str, cfg: SearchConfig) -> dict
     """Production-grade observables for a (V, ξ) pair (slow-roll closed-form
     is fine here — used only for ranking, not for the loss)."""
     try:
-        model = expressions_to_model(V_expr, xi_expr)
-        o = compute_observables_full(
-            model, N_pivot=cfg.N_pivot,
-            phi_range=cfg.phi_search_range, n_grid=cfg.phi_search_grid,
-        )
-        return o.as_dict()
+        with np.errstate(divide="ignore", invalid="ignore",
+                         over="ignore", under="ignore"):
+            model = expressions_to_model(V_expr, xi_expr)
+            o = compute_observables_full(
+                model, N_pivot=cfg.N_pivot,
+                phi_range=cfg.phi_search_range, n_grid=cfg.phi_search_grid,
+            )
+            return o.as_dict()
     except Exception:
         return {}
 
@@ -891,6 +895,7 @@ def run_joint_search(
     from .seed_families import V_FAMILIES, XI_FAMILIES, get_v_family, get_xi_family
 
     phi = np.linspace(*cfg.phi_sample_range, cfg.n_samples)
+    phi[np.isclose(phi, 0.0, atol=1e-12)] = 1.0e-6
     X = phi.reshape(-1, 1)
 
     V_candidate_pool: list[str] = []
@@ -1257,7 +1262,7 @@ def _hall_of_fame_strings(reg: "PySRRegressor", top_k: int = 5) -> list[str]:
     # Prefer simpler equations: PySR sorts by complexity in `equations_`.
     out: list[str] = []
     for _, row in eqs.iterrows():
-        s = str(row.get("equation", "")).strip()
+        s = str(row.get("equation", "")).strip().replace("x0", "phi")
         if s and s not in out:
             out.append(s)
         if len(out) >= top_k:

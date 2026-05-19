@@ -97,7 +97,13 @@ deepegb chat
 
 # Agent with Claude as fallback for hard reasoning:
 deepegb chat --provider anthropic
+
+# Supervised chat with monitoring and report generation:
+python scripts/supervise_chat.py -m "Search for Starobinsky-like models with r=0.05"
 ```
+
+The supervisor script captures `chat.log`, `supervisor.jsonl`, and `report.md`
+under `runs/supervised/<timestamp>/`.
 
 See `notebooks/01_smoke_test.ipynb` for a non-agent walk-through.
 

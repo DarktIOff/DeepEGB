@@ -215,9 +215,10 @@ def chi2_full_breakdown(
     # so PySR is pushed out of that basin but doesn't see a hard wall.
     if enforce_egb and np.isfinite(obs.delta1):
         d1 = abs(float(obs.delta1))
-        # Smooth bump: vanishes for d1 >> τ, rises to ~G near d1=0.
-        gain = 1.0e3
-        egb_penalty = gain * np.exp(-d1 / max(egb_min_delta1, 1e-30))
+        # Smooth bump: vanishes for d1 >> τ, rises sharply near the GR limit.
+        gain = 2.0e3
+        scale = max(0.5 * egb_min_delta1, 1e-30)
+        egb_penalty = gain * np.exp(-d1 / scale)
         if egb_penalty > 1e-3:
             components["egb_penalty"] = float(egb_penalty)
         if d1 < egb_min_delta1:
