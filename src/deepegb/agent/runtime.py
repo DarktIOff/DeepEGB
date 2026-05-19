@@ -40,6 +40,7 @@ from .mcp_tools import build_arxiv_mcp_tools, has_arxiv_mcp_configured
 from .tools import (
     analyze_egb_model_tool,
     diagnose_egb_model_tool,
+    normalize_egb_model_tool,
     plot_egb_model_tool,
     relic_gw_spectrum_tool,
     retrieve_literature_tool,
@@ -91,6 +92,18 @@ relic_gw_spectrum_tool(V_expr, xi_expr, N=55, T_reh_GeV=1e15, …)
     the user asks about LISA / DECIGO / PTA / ET / CMB-pol detectability,
     or the relic-GW signature of an EGB model.
 
+normalize_egb_model_tool(V_expr, xi_expr, N=55, P_S_target=2.1e-9)
+    Rescale (V, ξ) so the predicted scalar power amplitude P_𝓡 at
+    horizon crossing matches the Planck measurement (2.10 × 10⁻⁹).
+    Uses the slow-roll invariance V → λV, ξ → ξ/λ — keeps (n_s, r,
+    n_T, ε, c_T², δ_1) unchanged, scales P_𝓡 by λ. Returns the
+    normalised V_expr / xi_expr plus before/after values for every
+    observable so you can verify nothing else drifted.
+    CALL THIS on every candidate returned by `search_egb_potentials`
+    AND on any user-supplied model whose |ln(10¹⁰ A_s) − 3.044| > 0.5.
+    The bare SR output has arbitrary V scale; without normalisation,
+    P_𝓡 is meaningless.
+
 diagnose_egb_model_tool(V_expr, xi_expr, N=55, target_ns=..., target_r=...)
     Use this BEFORE giving up on a model that produced NaN observables,
     a huge χ² (> 1e3), or a "background_failure" message. Returns:
@@ -134,14 +147,23 @@ Q: "Tell me about ACT DR6 / Planck / BICEP-Keck constraints"
 Q: "Find me a model that fits ..." / discovery questions
   1. Translate targets to numbers (n_s, r, optionally Ω_GW at f).
   2. Call search_egb_potentials directly with those targets.
-  3. When it returns: analyze_egb_model_tool the top 1–2 candidates and
-     contextualise — is this Starobinsky-like? hilltop? pole-inflation?
-     Cite the family.
-  4. ALWAYS call plot_egb_model_tool on the best candidate. Save to
-     outputs/<short_name>_diagnostic.png. Report the saved path.
-  5. ALWAYS call relic_gw_spectrum_tool on the best candidate. Quote
-     Ω_GW h² at the LISA band (1 mHz) and the PTA band (10 nHz), compare
-     to detector floors, and state whether it is detectable.
+  3. For each of the top 1–2 returned candidates:
+     a. MANDATORY: normalize_egb_model_tool to rescale V → λV, ξ → ξ/λ
+        so the predicted scalar power amplitude P_𝓡 matches Planck
+        (2.10×10⁻⁹).  The raw SR output sits at an arbitrary V scale;
+        reporting unnormalised observables to the user is a bug.
+     b. analyze_egb_model_tool on the NORMALISED expressions — confirm
+        (n_s, r, ε, c_T²) are unchanged (they are slow-roll invariants)
+        and ln(10¹⁰ A_s) ≈ 3.044 after normalisation.
+     c. Contextualise: Starobinsky-like? hilltop? pole-inflation? Cite
+        the family from the local RAG if available.
+  4. ALWAYS call plot_egb_model_tool on the NORMALISED best candidate.
+     Save to outputs/<short_name>_diagnostic.png. Report the saved path.
+  5. ALWAYS call relic_gw_spectrum_tool on the NORMALISED best candidate
+     (Ω_GW depends on H_pivot which depends on V₀, so an un-normalised
+     spectrum is meaningless). Quote Ω_GW h² at the LISA band (1 mHz)
+     and the PTA band (10 nHz), compare to detector floors, and state
+     whether it is detectable.
 
 Q: "What relic-GW signature would this model leave at LISA?" /
    "Could this be detected by SKA / DECIGO / ET?"
@@ -289,6 +311,7 @@ def build_agent_team(
         plot_egb_model_tool,
         relic_gw_spectrum_tool,
         diagnose_egb_model_tool,
+        normalize_egb_model_tool,
     ]
     if enable_local_rag:
         tools.append(retrieve_literature_tool)

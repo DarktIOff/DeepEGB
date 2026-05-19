@@ -246,6 +246,49 @@ def relic_gw_spectrum_tool(
         )
 
 
+def normalize_egb_model_tool(
+    V_expr: str,
+    xi_expr: str = "0",
+    *,
+    N: float = 55.0,
+    P_S_target: float = 2.1e-9,
+) -> str:
+    """Rescale (V, ξ) to match the observed Planck scalar amplitude
+    P_S ≈ 2.10 × 10⁻⁹ at horizon crossing (default N=55).
+
+    Uses the slow-roll invariance V → λ V, ξ → ξ/λ which leaves
+    (n_s, r, n_T, ε, c_T², δ_1) unchanged but scales P_S by λ. The
+    tool computes λ = P_S_target / P_S_current and returns the
+    normalised V and ξ expressions, with before/after values for every
+    observable so you can confirm the invariants didn't drift.
+
+    Use this on EVERY result from search_egb_potentials and on any
+    candidate before publishing or comparing to observations: the
+    symbolic search has no idea what V scale is physical, so its raw
+    output sits at some arbitrary amplitude.
+
+    Parameters
+    ----------
+    V_expr     : Sympy-style V(φ) expression in `phi`.
+    xi_expr    : Sympy-style ξ(φ) expression. Use "0" for the GR limit.
+    N          : pivot e-folds before end of inflation.
+    P_S_target : target amplitude (default Planck 2.10e-9).
+    """
+    try:
+        from ..physics import normalize_egb_model
+        result = normalize_egb_model(V_expr, xi_expr, N=N,
+                                     P_S_target=P_S_target)
+        return json.dumps(result.as_dict(), indent=2, default=str)
+    except Exception as exc:                                       # noqa: BLE001
+        return _tool_error(
+            "normalize_failure",
+            f"{type(exc).__name__}: {exc}",
+            suggestion="Verify the input expression is parseable and the "
+                       "model produces finite observables (call "
+                       "analyze_egb_model_tool first).",
+        )
+
+
 def diagnose_egb_model_tool(
     V_expr: str,
     xi_expr: str | None = None,
@@ -354,6 +397,7 @@ def all_tools(include_rag: bool = True) -> list:
         plot_egb_model_tool,
         relic_gw_spectrum_tool,
         diagnose_egb_model_tool,
+        normalize_egb_model_tool,
     ]
     if include_rag:
         tools.append(retrieve_literature_tool)

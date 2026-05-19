@@ -257,6 +257,25 @@ def plot(v_expr: str, xi_expr: str | None, N_pivot: float | None, out_path: str)
     click.echo(f"Saved → {p}")
 
 
+@main.command()
+@click.argument("v_expr")
+@click.argument("xi_expr", default="0")
+@click.option("--N", "N_pivot", default=55.0, type=float)
+@click.option("--P-S", "P_S_target", default=2.1e-9, type=float,
+              show_default=True,
+              help="Target scalar amplitude (Planck 2018: 2.10e-9).")
+def normalize(v_expr: str, xi_expr: str, N_pivot: float, P_S_target: float):
+    """Rescale (V, ξ) so P_𝓡 at horizon crossing matches Planck A_s.
+
+    Applies V → λV, ξ → ξ/λ — keeps (n_s, r, n_T, ε, c_T²) unchanged
+    and scales P_𝓡 by λ.
+    """
+    from rich import print_json
+    from .physics import normalize_egb_model
+    res = normalize_egb_model(v_expr, xi_expr, N=N_pivot, P_S_target=P_S_target)
+    print_json(data=res.as_dict(), default=str)
+
+
 @main.command(name="relic-gw")
 @click.argument("v_expr")
 @click.argument("xi_expr", default=None, required=False)

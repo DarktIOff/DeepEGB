@@ -63,6 +63,12 @@ from .detectors import (
     detectors_in_band,
     sensitivity_at,
 )
+from .normalize import (
+    NormalizationResult,
+    PLANCK_A_S,
+    PLANCK_LN_10_10_A_S,
+    normalize_egb_model,
+)
 
 __all__ = [
     # Core data types and trajectory
@@ -111,4 +117,9 @@ __all__ = [
     "detector_by_name",
     "detectors_in_band",
     "sensitivity_at",
+    # Amplitude normalisation
+    "NormalizationResult",
+    "PLANCK_A_S",
+    "PLANCK_LN_10_10_A_S",
+    "normalize_egb_model",
 ]
