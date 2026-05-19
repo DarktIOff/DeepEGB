@@ -98,6 +98,8 @@ def search_egb_potentials(
     cfg = SearchConfig(
         target_ns=target_ns, sigma_ns=sigma_ns,
         target_r=target_r, sigma_r=sigma_r,
+        target_lnAs=DEFAULTS.targets.lnAs,
+        sigma_lnAs=DEFAULTS.targets.lnAs_sigma,
         N_pivot=N_pivot,
         niterations=niterations, populations=populations,
         maxsize=maxsize,

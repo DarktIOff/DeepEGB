@@ -105,14 +105,27 @@ def _N_derivatives(N: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray
 
 def precompute_mode_inputs(model: EGBModel,
                            traj: BackgroundTrajectory) -> TrajectoryInterpolants:
-    """Precompute G_T, c_T², c_S², z, M(N) on the trajectory grid."""
+    """Precompute G_T, c_T², c_S², z, M(N) on the trajectory grid.
+
+    Sound speeds are evaluated with **trajectory-exact** H, ε₁, δ₁, ξ_,φ
+    (from the full ODE integration) rather than the slow-roll H²=V/3 seed.
+    This eliminates the leading source of c_S² error without changing the
+    formula itself.
+    """
     n = traj.N.size
     G_T = 1.0 - traj.delta1
     c_T2 = np.empty(n)
     c_S2 = np.empty(n)
     for i, p in enumerate(traj.phi):
-        c_T2[i] = compute_c_T2(model, float(p))
-        c_S2[i] = compute_c_S2(model, float(p))
+        c_T2[i] = compute_c_T2(model, float(p),
+                                eps=float(traj.eps1[i]),
+                                delta1=float(traj.delta1[i]))
+        xip_i = float(model.xi_phi(float(p)))
+        c_S2[i] = compute_c_S2(model, float(p),
+                                eps=float(traj.eps1[i]),
+                                delta1=float(traj.delta1[i]),
+                                H=float(traj.H[i]),
+                                xip=xip_i)
     # Replace bad entries with linear interpolation from neighbours.
     for arr in (G_T, c_T2, c_S2):
         bad = ~np.isfinite(arr) | (arr <= 0)

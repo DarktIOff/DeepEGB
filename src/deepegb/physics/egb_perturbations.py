@@ -200,7 +200,11 @@ def compute_c_T2(
     return F_T / G_T
 
 
-def compute_c_S2(model: EGBModel, phi: float) -> float:
+def compute_c_S2(model: EGBModel, phi: float, *,
+                  eps: float | None = None,
+                  delta1: float | None = None,
+                  H: float | None = None,
+                  xip: float | None = None) -> float:
     """Scalar sound speed squared (EGB-corrected, leading order).
 
     Following Kawai & Soda 1999 (gr-qc/9901002) and the specialisation in
@@ -209,18 +213,20 @@ def compute_c_S2(model: EGBModel, phi: float) -> float:
 
         c_S² = 1  −  4 ξ_,φ² H² / [ ε₁ · (1 − δ₁)² ]   +  𝒪(slow-roll³).
 
-    The combination ξ̇²H²/(ε φ̇²) = ξ_,φ² H²/ε emerges from the cross-term
-    between the inflaton kinetic energy and the GB mixing at quadratic order
-    in perturbations, divided by Q_S/(1−δ₁)². Reduces to c_S² = 1 in the
-    GR limit (ξ_,φ → 0), and is bounded between 0 and 1 for any healthy
-    EGB inflation model.
-
-    For sub-percent precision on n_s in regions where this leading correction
-    is itself small, swap in the full Horndeski expression (KYY 2011 Eq. 3.21
-    specialised through G_5 = −4 ξ_,φ ln X). The infrastructure for that —
-    the full background trajectory in `egb_background.py` — is now in place;
-    the algebraic specialisation is left as a TODO for next iteration.
+    When called from ``precompute_mode_inputs`` the caller can pass
+    trajectory-exact (H, ε₁, δ₁, ξ_,φ) so the formula is evaluated on
+    the full-background H rather than the slow-roll H²=V/3 seed.
     """
+    if all(v is not None for v in (eps, delta1, H, xip)):
+        if not (np.isfinite(eps) and eps > 0 and np.isfinite(delta1)
+                and np.isfinite(H) and np.isfinite(xip)):
+            return np.nan
+        one_minus_d1 = 1.0 - delta1
+        if abs(one_minus_d1) < 1.0e-12:
+            return np.nan
+        correction = 4.0 * xip * xip * H * H / (eps * one_minus_d1 * one_minus_d1)
+        return float(1.0 - correction)
+
     bg = background_at(model, phi)
     if not (np.isfinite(bg["eps"]) and bg["eps"] > 0 and np.isfinite(bg["delta1"])):
         return np.nan
@@ -275,7 +281,7 @@ def power_spectra_at(model: EGBModel, phi: float) -> dict[str, float]:
 # Numerical helpers: dlnX/dN along the slow-roll trajectory
 # ---------------------------------------------------------------------------
 def _running_dlnX_dN(model: EGBModel, phi: float, key: str,
-                     dphi: float = 5.0e-3) -> float:
+                      dphi: float = 5.0e-3) -> float:
     """Compute d ln|X|/dN at φ, where X is one of the keys returned by
     background_at, and dN = −V/Q dφ along the slow-roll trajectory."""
     bg0 = background_at(model, phi)
@@ -294,6 +300,19 @@ def _running_dlnX_dN(model: EGBModel, phi: float, key: str,
     # dN/dφ = -V/Q   ⇒  dφ/dN = -Q/V
     dphi_dN = -bg0["Q"] / bg0["V"]
     return (dX_dphi * dphi_dN) / X0
+
+
+def _running_dphi(model: EGBModel, phi: float, key: str,
+                   dphi: float = 5.0e-3) -> float:
+    """Compute dX/dφ at φ via central differences, where X is a key
+    returned by background_at."""
+    bg_p = background_at(model, phi + dphi)
+    bg_m = background_at(model, phi - dphi)
+    Xp = bg_p[key]
+    Xm = bg_m[key]
+    if not (np.isfinite(Xp) and np.isfinite(Xm)):
+        return np.nan
+    return (Xp - Xm) / (2.0 * dphi)
 
 
 # ---------------------------------------------------------------------------
@@ -562,12 +581,18 @@ def compute_observables_full(
     phi_hi = _bracket_phi_for_N(model, phi_end,
                                  N_pivot + dN_for_running, phi_range, n_grid)
     if phi_lo is None or phi_hi is None:
-        # Fall back to closed-form leading-order indices.
         eps = bg["eps"]
         d1 = bg["delta1"]
-        eta = bg["Vpp"] / bg["V"]
-        n_s_lo = 1.0 - 2.0 * eps - 2.0 * eta + 2.0 * d1   # KLT-like leading order
-        n_T_lo = -2.0 * eps - d1                          # KLT, YGS leading order
+        deps_dphi = _running_dphi(model, phi_N, "eps")
+        if np.isfinite(deps_dphi) and np.isfinite(bg["Q"]) and bg["Q"] != 0:
+            n_s_lo = 1.0 - 2.0 * eps + (bg["Q"] / (eps * bg["V"])) * deps_dphi
+        else:
+            n_s_lo = np.nan
+        dPT_dphi = _running_dphi(model, phi_N, "delta1")
+        if np.isfinite(dPT_dphi) and np.isfinite(bg["Q"]) and bg["Q"] != 0:
+            n_T_lo = -2.0 * eps + (bg["Q"] / (eps * bg["V"])) * dPT_dphi * eps
+        else:
+            n_T_lo = -2.0 * eps - d1
         r_val = spec["P_T"] / spec["P_S"]
 
         # EGB consistency in fallback branch

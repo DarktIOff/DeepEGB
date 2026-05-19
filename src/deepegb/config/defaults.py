@@ -95,6 +95,8 @@ class _TargetDefaults:
     ns_sigma: float
     r: float
     r_sigma: float
+    lnAs: float | None
+    lnAs_sigma: float
 
 
 @dataclass(frozen=True)
@@ -186,6 +188,8 @@ def _build_defaults(raw: dict[str, Any]) -> Defaults:
             ns_sigma=float(tg.get("ns_sigma", 0.003)),
             r=float(tg.get("r", 0.025)),
             r_sigma=float(tg.get("r_sigma", 0.013)),
+            lnAs=float(tg["lnAs"]) if "lnAs" in tg else None,
+            lnAs_sigma=float(tg.get("lnAs_sigma", 0.014)),
         ),
         gw=_GWDefaults(
             n_decades=float(gw.get("n_decades", 30.0)),

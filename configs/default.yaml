@@ -110,6 +110,12 @@ targets:
   ns_sigma: 0.0030
   r: 0.025
   r_sigma: 0.013
+  # Planck 2018: ln(10^10 A_s) = 3.044 ± 0.014
+  # Including A_s in the search loss ensures PySR discovers models with
+  # approximately correct amplitude, avoiding catastrophic post-hoc
+  # normalisation (V→λV, ξ→ξ/λ with λ ~ 10^-10).
+  lnAs: 3.044
+  lnAs_sigma: 0.014
 
 # Default xi expression — must be non-trivial (no GR default).
 # Used by analyze, plot, and CLI commands as the default coupling.
