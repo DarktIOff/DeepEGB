@@ -1,17 +1,26 @@
 """
 MCP server adapters — connect external Model Context Protocol servers
-(e.g. an arXiv search MCP) as Agno tools.
+as Agno tools.
 
-We default to **blazickjp/arxiv-mcp-server** (Python, pip-installable),
-which exposes search/download/read_paper/list_papers tools. Override the
-launch command via the `DEEPEGB_ARXIV_MCP_CMD` env var if you have a
-different MCP server installed.
+Two MCP servers are supported:
+
+1. **arXiv MCP** (blazickjp/arxiv-mcp-server) — exposes search/download/
+   read_paper/list_papers tools.  Override launch command via
+   ``DEEPEGB_ARXIV_MCP_CMD``.
+
+2. **CosmoRAG MCP** (cosmorag-mcp) — exposes cosmorag_search /
+   cosmorag_list_papers / cosmorag_get_paper / cosmorag_add_arxiv / …
+   Override launch command via ``DEEPEGB_COSMORAG_MCP_CMD``.
+   NOTE: direct Python import (cosmorag_tools.py) is preferred over MCP
+   because it avoids subprocess overhead.  Use MCP only when the direct
+   import fails (e.g. CosmoRAG is installed in a separate environment).
 
 Usage
 -----
-    from deepegb.agent.mcp_tools import build_arxiv_mcp_tools
-    arxiv = await build_arxiv_mcp_tools()        # async — Agno requirement
-    agent = Agent(..., tools=[arxiv])
+    from deepegb.agent.mcp_tools import build_arxiv_mcp_tools, build_cosmorag_mcp_tools
+    arxiv = await build_arxiv_mcp_tools()
+    cosmorag = await build_cosmorag_mcp_tools()
+    agent = Agent(..., tools=[arxiv, cosmorag])
 
 References
 ----------
@@ -124,7 +133,7 @@ async def build_arxiv_mcp_tools() -> Any:
     return tools
 
 
-def has_arxiv_mcp_configured() -> bool:
+def has_arxiv_mcp_configured() -> bool:  # kept for backward compat
     """Heuristic: check whether the configured MCP launch command points to
     something real on disk (or is `uvx ...` which we trust)."""
     try:
@@ -136,3 +145,63 @@ def has_arxiv_mcp_configured() -> bool:
     # Otherwise check $PATH
     import shutil
     return shutil.which(cmd) is not None
+
+
+# ---------------------------------------------------------------------------
+# CosmoRAG MCP adapter
+# ---------------------------------------------------------------------------
+
+DEFAULT_COSMORAG_MCP_CMD = "cosmorag-mcp"
+
+
+def _cosmorag_mcp_command() -> str:
+    """Return the shell command used to launch the CosmoRAG MCP server."""
+    return os.environ.get("DEEPEGB_COSMORAG_MCP_CMD", DEFAULT_COSMORAG_MCP_CMD)
+
+
+async def build_cosmorag_mcp_tools() -> Any:
+    """Construct an Agno MCPTools wrapper that launches the CosmoRAG MCP server.
+
+    Prefer the direct Python integration in ``cosmorag_tools.py`` over this
+    function — use MCP only when CosmoRAG lives in a separate virtualenv.
+    Must be called from within an async context (Agno requirement).
+    """
+    MCPTools = _import_mcp_tools_class()
+    full_cmd = _cosmorag_mcp_command()
+
+    for kwargs in (
+        dict(command=full_cmd, timeout_seconds=120, transport="stdio"),
+        dict(command=full_cmd, timeout_seconds=120),
+        dict(command=full_cmd),
+        dict(server=full_cmd),
+    ):
+        try:
+            tools = MCPTools(**kwargs)
+            break
+        except TypeError:
+            continue
+    else:
+        tools = MCPTools(full_cmd)
+
+    if hasattr(tools, "connect"):
+        await tools.connect()
+    elif hasattr(tools, "initialize"):
+        await tools.initialize()
+
+    if not getattr(tools, "initialized", False):
+        raise RuntimeError(
+            "CosmoRAG MCPTools did not reach the initialized state after connect()."
+        )
+    if not getattr(tools, "functions", None):
+        raise RuntimeError(
+            "CosmoRAG MCPTools connected but exposed no tools. "
+            "Check that cosmorag-mcp is installed: pip install 'cosmorag[mcp]'"
+        )
+    return tools
+
+
+def has_cosmorag_mcp_configured() -> bool:
+    """Return True when the cosmorag-mcp binary is discoverable on PATH."""
+    import shutil
+    cmd = _cosmorag_mcp_command().split()[0]
+    return bool(shutil.which(cmd))

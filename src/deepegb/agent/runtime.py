@@ -33,10 +33,18 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Optional
+import re
+import uuid
+from pathlib import Path
+from typing import Any, Optional
 
 from .llm import get_model
-from .mcp_tools import build_arxiv_mcp_tools, has_arxiv_mcp_configured
+from .mcp_tools import (
+    build_arxiv_mcp_tools,
+    build_cosmorag_mcp_tools,
+    has_arxiv_mcp_configured,
+    has_cosmorag_mcp_configured,
+)
 from .tools import (
     analyze_egb_model_tool,
     diagnose_egb_model_tool,
@@ -46,11 +54,52 @@ from .tools import (
     retrieve_literature_tool,
     search_egb_potentials,
 )
+from .cosmorag_tools import all_cosmorag_tools, is_cosmorag_available
 
 try:
     from agno.agent import Agent
 except ImportError:  # pragma: no cover
     Agent = None  # type: ignore
+
+_db: Any = None
+try:
+    from agno.db.sqlite import SqliteDb
+    _db_path = Path(os.path.expanduser("~/.deepegb/agent.db"))
+    _db_path.parent.mkdir(parents=True, exist_ok=True)
+    _db = SqliteDb(db_file=str(_db_path))
+except Exception as _db_exc:
+    _db = None
+    import logging as _logging
+    _logging.getLogger(__name__).warning(
+        "DeepEGB session persistence disabled: could not initialise "
+        "SqliteDb (%s).  Install SQLAlchemy or check ~/.deepegb/ permissions.",
+        _db_exc,
+    )
+    print(
+        f"[DeepEGB] WARNING: session persistence disabled — {_db_exc}.  "
+        "Install SQLAlchemy (`pip install sqlalchemy`) or check "
+        "~/.deepegb/ permissions."
+    )
+
+_MemoryManager: Any = None
+_MemoryTools: Any = None
+try:
+    from agno.memory.manager import MemoryManager as _AgnoMemoryManager
+    _MemoryManager = _AgnoMemoryManager
+except ImportError:
+    pass
+try:
+    from agno.tools.memory import MemoryTools as _AgnoMemoryTools
+    _MemoryTools = _AgnoMemoryTools
+except ImportError:
+    pass
+
+_SessionSummaryManager: Any = None
+try:
+    from agno.session.summary import SessionSummaryManager as _AgnoSSM
+    _SessionSummaryManager = _AgnoSSM
+except ImportError:
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -126,8 +175,38 @@ retrieve_literature_tool(query, k=5)
 
 [arXiv MCP tools] (when connected)
     search_papers / download_paper / read_paper / list_papers — for
-    papers not in the local index. Use when local RAG returns nothing
-    on a topic the user wants citations for.
+    papers not in the CosmoRAG database or local index.
+
+[CosmoRAG tools] (when connected)
+cosmorag_search_tool(query, top_k=10)
+    Search the CosmoRAG cosmology-paper knowledge base. Hybrid retrieval:
+    FTS5 + token overlap + equation match + embedding similarity +
+    cross-encoder reranking over all indexed arXiv papers.  Returns
+    passages with arXiv ID, section, LaTeX equations, and scores.
+    PREFER over retrieve_literature_tool — CosmoRAG's equation-aware
+    retrieval is more powerful for physics queries containing formulas.
+
+cosmorag_list_papers_tool()
+    List all papers in CosmoRAG with title, arXiv ID, authors, year.
+    Call at the start of a research session to know what is available.
+
+cosmorag_get_paper_tool(arxiv_id)
+    Full metadata (title, authors, year, categories, abstract) for one
+    paper by arXiv ID.  Use when the user asks for citation data or
+    the abstract.
+
+cosmorag_add_paper_tool(arxiv_id)
+    Download and ingest one arXiv paper into CosmoRAG.  Paper is
+    FTS5-searchable immediately; embeddings run in background.
+    Call when search returns nothing and the relevant paper is known.
+
+cosmorag_add_papers_tool(arxiv_ids)
+    Ingest multiple papers at once with a single background embedding
+    pass — more efficient than repeated single-paper calls.
+
+cosmorag_embedding_status_tool()
+    Live progress and ETA for the background embedding worker.
+    Call after cosmorag_add_paper_tool if the user asks about status.
 
 ────────────────────────────────────────────────────────────────────
 DECISION TREE
@@ -139,10 +218,15 @@ Q: "What does Starobinsky inflation predict?" / specific named model
   3. plot_egb_model_tool — always produce the 6-panel diagnostic.
   → Answer in prose with explicit (n_s, r, ...) values from the tool.
 
-Q: "Tell me about ACT DR6 / Planck / BICEP-Keck constraints"
-  1. retrieve_literature_tool with the experiment name.
-  2. If empty: arXiv MCP search.
-  3. Quote the constraints with paper IDs.
+Q: "Tell me about ACT DR6 / Planck / BICEP-Keck constraints" /
+   factual physics claim / "what does paper X say?"
+  TOOL PRIORITY for literature retrieval:
+  1. cosmorag_search_tool(query, top_k=10) — primary (equation-aware).
+  2. retrieve_literature_tool(query) — fallback (local FAISS+BM25 index).
+  3. [arXiv MCP] search_papers — for papers not yet in either system.
+  Always cite with arXiv ID + section from whichever tool returned the hit.
+  If cosmorag_search_tool returns nothing useful, call cosmorag_add_paper_tool
+  for the relevant arXiv ID first, then search again.
 
 Q: "Find me a model that fits ..." / discovery questions
   1. Translate targets to numbers (n_s, r, optionally Ω_GW at f).
@@ -191,7 +275,10 @@ Q: "What's the difference between c_T² in EGB vs GR?"
     Hwang-Noh 2005 / KLT 2014 / YGS 2018 sections if available.
 
 Q: "Are there recent papers on X?"
-  → arXiv MCP first; supplement with RAG if user has cached anything.
+  1. cosmorag_search_tool(X) — see what is already indexed.
+  2. [arXiv MCP] search_papers(X) — discover new papers.
+  3. cosmorag_add_papers_tool([ids]) — ingest interesting finds.
+  Report which papers are already in CosmoRAG and which are new.
 
 ────────────────────────────────────────────────────────────────────
 HARD RULES
@@ -285,6 +372,19 @@ TOOL DISCIPLINE (READ TWICE)
 • When a tool's JSON output contains numerical fields, copy the actual
   numbers into your reply — don't paraphrase ("about 0.96") and don't
   refer to the tool output without quoting it.
+
+ANTI-LOOP RULES (CRITICAL — OVERRIDES ALL OTHER INSTRUCTIONS)
+1. If you catch yourself saying "let me try", "I should", "I will
+   analyze", "let's check", or any planning phrase MORE THAN ONCE
+   without an intervening tool call, STOP IMMEDIATELY and call exactly
+   one tool right now. No more prose until a tool has been invoked.
+2. NEVER estimate n_s, r, observables, or any numerical quantity from
+   memory or from "similar models". Always derive them from tool
+   outputs. If you cannot call a tool, explicitly state what is blocking
+   you (missing argument, tool error, API limit) instead of guessing.
+3. If you are unable to call any tool (API down, all tools errored),
+   say so explicitly: "I am unable to proceed because …". Do NOT
+   produce speculative numerical answers as a substitute.
 """
 
 
@@ -293,6 +393,10 @@ def build_agent_team(
     *,
     enable_arxiv_mcp: bool = True,
     enable_local_rag: bool = True,
+    enable_cosmorag: bool = True,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    new_session: bool = False,
 ) -> "Agent":
     """Build the DeepEGB Agent with all production tools attached.
 
@@ -304,6 +408,10 @@ def build_agent_team(
         raise RuntimeError("Agno is not installed. `pip install agno`.")
 
     model = get_model(provider)
+    debug = bool(int(os.environ.get("DEEPEGB_DEBUG", "0")))
+
+    if not session_id:
+        session_id = str(uuid.uuid4())
 
     tools: list = [
         search_egb_potentials,
@@ -315,6 +423,38 @@ def build_agent_team(
     ]
     if enable_local_rag:
         tools.append(retrieve_literature_tool)
+        try:
+            from ..rag.index import DEFAULT_MODEL, _load_embedder
+            _load_embedder(DEFAULT_MODEL)
+            if debug:
+                print("[DeepEGB] RAG embedder warm-up done.")
+        except Exception as _warmup_exc:
+            if debug:
+                print(f"[DeepEGB] RAG embedder warm-up skipped: {_warmup_exc}")
+
+    if enable_cosmorag:
+        if is_cosmorag_available():
+            tools.extend(all_cosmorag_tools())
+            print("[DeepEGB] CosmoRAG tools connected (direct Python import).")
+        elif has_cosmorag_mcp_configured():
+            # Fall back to MCP subprocess when CosmoRAG is in a separate venv.
+            try:
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                cosmorag_mcp = loop.run_until_complete(build_cosmorag_mcp_tools())
+                tools.append(cosmorag_mcp)
+                print("[DeepEGB] CosmoRAG MCP tools connected.")
+            except Exception as _cr_exc:
+                print(f"[DeepEGB] CosmoRAG not connected: {_cr_exc}")
+        else:
+            if debug:
+                print("[DeepEGB] CosmoRAG not available (install cosmorag or set cosmorag-mcp).")
+
+    if _MemoryTools is not None and _db is not None:
+        tools.append(_MemoryTools(db=_db))
 
     if enable_arxiv_mcp and has_arxiv_mcp_configured():
         try:
@@ -329,19 +469,82 @@ def build_agent_team(
         except Exception as exc:
             print(f"[DeepEGB] arXiv MCP not connected: {exc}")
 
-    debug = bool(int(os.environ.get("DEEPEGB_DEBUG", "0")))
-    # Some Agno versions removed the `markdown` kwarg; pass it conditionally.
-    agent_kwargs = dict(
+    session_state: dict[str, Any] = {
+        "workflow.current_model": "",
+        "workflow.normalized_model": "",
+        "workflow.last_plot_path": "",
+        "preferences.N_pivot": 55,
+        "preferences.T_reh_GeV": 1e15,
+        "notes": "",
+    }
+
+    memory_manager = None
+    if _MemoryManager is not None and _db is not None:
+        try:
+            memory_manager = _MemoryManager(model=model, db=_db)
+        except Exception:
+            memory_manager = None
+
+    session_summary_manager = None
+    if _SessionSummaryManager is not None:
+        try:
+            session_summary_manager = _SessionSummaryManager(
+                model=model, last_n_runs=6, conversation_limit=120,
+            )
+        except Exception:
+            session_summary_manager = None
+
+    agent_kwargs: dict[str, Any] = dict(
         name="DeepEGB",
         model=model,
         instructions=MAIN_AGENT_INSTRUCTIONS,
         tools=tools,
         debug_mode=debug,
+        session_id=session_id,
+        user_id=user_id,
+        add_history_to_context=True,
+        num_history_runs=8,
+        read_chat_history=True,
+        read_tool_call_history=True,
+        session_state=session_state,
+        add_session_state_to_context=True,
+        enable_agentic_state=True,
+        retries=2,
+        delay_between_retries=1,
+        tool_call_limit=8,
     )
+    if _db is not None:
+        agent_kwargs["db"] = _db
+    if memory_manager is not None:
+        agent_kwargs["memory_manager"] = memory_manager
+        agent_kwargs["update_memory_on_run"] = True
+        agent_kwargs["add_memories_to_context"] = True
+        agent_kwargs["enable_agentic_memory"] = True
+    if session_summary_manager is not None:
+        agent_kwargs["session_summary_manager"] = session_summary_manager
+        agent_kwargs["enable_session_summaries"] = True
+        agent_kwargs["add_session_summary_to_context"] = True
+
+    def _try_build(kwargs: dict[str, Any]) -> "Agent":
+        try:
+            return Agent(**kwargs, markdown=True)
+        except TypeError:
+            try:
+                return Agent(**kwargs)
+            except TypeError:
+                strip = {"markdown", "retries", "delay_between_retries",
+                         "tool_call_limit"}
+                return Agent(**{k: v for k, v in kwargs.items()
+                                if k not in strip})
+
     try:
-        return Agent(**agent_kwargs, markdown=True)
+        return _try_build(agent_kwargs)
     except TypeError:
-        return Agent(**agent_kwargs)
+        reduced = {k: v for k, v in agent_kwargs.items() if k in (
+            "name", "model", "instructions", "tools", "debug_mode",
+            "session_id", "user_id", "markdown",
+        )}
+        return _try_build(reduced)
 
 
 # Convenience alias for code that imports the old name.
@@ -375,6 +578,28 @@ def _chunk_text(chunk) -> tuple[str | None, str]:
     return None, event
 
 
+_LOOP_GUARD_SUSPICIOUS = 0
+_LOOP_GUARD_CORRECTED = False
+_LOOP_GUARD_PHRASES = re.compile(
+    r"(?:let\s+me\s+try|i\s+should|i\s+will\s+analyz|let's\s+check|"
+    r"i\s+will\s+comput|going\s+to\s+analyz|i'll\s+look|i\s+am\s+going\s+to)",
+    re.IGNORECASE,
+)
+
+
+def _reset_loop_guard() -> None:
+    global _LOOP_GUARD_SUSPICIOUS, _LOOP_GUARD_CORRECTED
+    _LOOP_GUARD_SUSPICIOUS = 0
+    _LOOP_GUARD_CORRECTED = False
+
+
+def _classify_turn(text: str, had_tool_event: bool) -> bool:
+    """Return True if the turn is 'suspicious' (planning phrases, no tools)."""
+    if had_tool_event:
+        return False
+    return bool(_LOOP_GUARD_PHRASES.search(text))
+
+
 def _agent_say(agent, msg: str, *, plain: bool = False) -> None:
     """Send a message to the agent and stream the response to stdout.
 
@@ -385,15 +610,43 @@ def _agent_say(agent, msg: str, *, plain: bool = False) -> None:
       * plain   — write each streamed chunk straight to stdout. Scroll-
         friendly, redirectable to a file with `tee` / `>`.
 
+    Includes a lightweight loop guard: after each streamed response the
+    turn is classified as "suspicious" if it contains planning phrases
+    but no tool events. After 3 consecutive suspicious turns a
+    corrective follow-up prompt is sent automatically (max once per
+    user turn).  The guard resets at the start of each user message.
+
     Tolerates Agno API drift across versions.
     """
+    global _LOOP_GUARD_SUSPICIOUS, _LOOP_GUARD_CORRECTED
+
+    def _post_stream_check(had_tool: bool, text: str) -> None:
+        """Classify the completed turn and maybe auto-correct."""
+        global _LOOP_GUARD_SUSPICIOUS, _LOOP_GUARD_CORRECTED
+        if _classify_turn(text, had_tool):
+            _LOOP_GUARD_SUSPICIOUS += 1
+        else:
+            _LOOP_GUARD_SUSPICIOUS = 0
+        if _LOOP_GUARD_SUSPICIOUS >= 3 and not _LOOP_GUARD_CORRECTED:
+            _LOOP_GUARD_CORRECTED = True
+            print("\n[DeepEGB LOOP GUARD] Agent is in a planning loop. "
+                  "Sending corrective prompt.\n")
+            _agent_say(
+                agent,
+                "You are in a planning loop. Call exactly one relevant "
+                "tool now and return its numeric output.",
+                plain=True,
+            )
+
     if not plain and hasattr(agent, "aprint_response"):
         try:
             _run_coro_sync(agent.aprint_response(msg, stream=True))
+            _post_stream_check(False, "")
             return
         except TypeError:
             try:
                 _run_coro_sync(agent.aprint_response(msg))
+                _post_stream_check(False, "")
                 return
             except Exception:        # noqa: BLE001
                 pass
@@ -401,10 +654,12 @@ def _agent_say(agent, msg: str, *, plain: bool = False) -> None:
     if not plain and hasattr(agent, "print_response"):
         try:
             agent.print_response(msg, stream=True)
+            _post_stream_check(False, "")
             return
         except TypeError:
             try:
                 agent.print_response(msg)
+                _post_stream_check(False, "")
                 return
             except Exception:        # noqa: BLE001
                 pass     # fall through to plain mode
@@ -418,10 +673,14 @@ def _agent_say(agent, msg: str, *, plain: bool = False) -> None:
                 stream = await agent.arun(msg)
             if hasattr(stream, "__aiter__"):
                 last_was_thought = False
+                turn_text_parts: list[str] = []
+                had_tool = False
                 async for chunk in stream:
                     content, event = _chunk_text(chunk)
                     if event and event.lower().startswith(("tool", "reasoning",
                                                            "thinking")):
+                        if event.lower().startswith("tool"):
+                            had_tool = True
                         if not last_was_thought:
                             print(f"\n[{event}] ", end="", flush=True)
                         last_was_thought = True
@@ -431,10 +690,14 @@ def _agent_say(agent, msg: str, *, plain: bool = False) -> None:
                     last_was_thought = False
                     if content is None:
                         continue
+                    turn_text_parts.append(content)
                     print(content, end="", flush=True)
                 print()
+                _post_stream_check(had_tool, " ".join(turn_text_parts))
                 return
-            print(getattr(stream, "content", str(stream)))
+            resp = getattr(stream, "content", str(stream))
+            print(resp)
+            _post_stream_check(False, resp)
 
         try:
             _run_coro_sync(_async_plain_run())
@@ -449,12 +712,14 @@ def _agent_say(agent, msg: str, *, plain: bool = False) -> None:
             stream = agent.run(msg)
         if hasattr(stream, "__iter__") and not isinstance(stream, str):
             last_was_thought = False
+            turn_text_parts: list[str] = []
+            had_tool = False
             for chunk in stream:
                 content, event = _chunk_text(chunk)
-                # Agno emits various event types: RunResponse, ToolCall,
-                # ToolResult, ReasoningStep ... Tag the non-content ones.
                 if event and event.lower().startswith(("tool", "reasoning",
                                                        "thinking")):
+                    if event.lower().startswith("tool"):
+                        had_tool = True
                     if not last_was_thought:
                         print(f"\n[{event}] ", end="", flush=True)
                     last_was_thought = True
@@ -464,14 +729,42 @@ def _agent_say(agent, msg: str, *, plain: bool = False) -> None:
                 last_was_thought = False
                 if content is None:
                     continue
+                turn_text_parts.append(content)
                 print(content, end="", flush=True)
             print()
+            _post_stream_check(had_tool, " ".join(turn_text_parts))
             return
         # Single result object
-        print(getattr(stream, "content", str(stream)))
+        resp = getattr(stream, "content", str(stream))
+        print(resp)
+        _post_stream_check(False, resp)
         return
     # Last resort
-    print(agent(msg))
+    resp = str(agent(msg))
+    print(resp)
+    _post_stream_check(False, resp)
+
+
+def _collect_tools(
+    *,
+    enable_local_rag: bool = True,
+    enable_cosmorag: bool = True,
+    enable_arxiv_mcp: bool = False,
+) -> list:
+    """Build a flat list of callable tools for the native Claude API backend."""
+    tools: list = [
+        search_egb_potentials,
+        analyze_egb_model_tool,
+        plot_egb_model_tool,
+        relic_gw_spectrum_tool,
+        diagnose_egb_model_tool,
+        normalize_egb_model_tool,
+    ]
+    if enable_local_rag:
+        tools.append(retrieve_literature_tool)
+    if enable_cosmorag and is_cosmorag_available():
+        tools.extend(all_cosmorag_tools())
+    return tools
 
 
 def run_chat(
@@ -480,15 +773,73 @@ def run_chat(
     *,
     enable_arxiv_mcp: bool = True,
     enable_local_rag: bool = True,
+    enable_cosmorag: bool = True,
+    use_native_claude: Optional[bool] = None,
     plain: bool = False,
+    session_id: Optional[str] = None,
+    user_id: Optional[str] = None,
+    new_session: bool = False,
 ) -> None:
-    """Interactive REPL with the DeepEGB agent.  /exit or Ctrl-D to quit."""
+    """Interactive REPL with the DeepEGB agent.  /exit or Ctrl-D to quit.
+
+    When ``use_native_claude`` is True (or ``DEEPEGB_USE_NATIVE_CLAUDE=1``
+    with provider=anthropic), bypasses Agno and drives the Anthropic API
+    directly with full prompt-caching and streaming support.
+    """
+    # Resolve whether to use native Claude API
+    if use_native_claude is None:
+        use_native_claude = bool(int(os.environ.get("DEEPEGB_USE_NATIVE_CLAUDE", "0")))
+
+    eff_provider = (provider or os.environ.get("DEEPEGB_PROVIDER", "local")).lower()
+    if use_native_claude and eff_provider != "anthropic":
+        import warnings
+        warnings.warn(
+            "use_native_claude=True requires provider='anthropic'; "
+            f"got '{eff_provider}'. Ignoring native-claude flag.",
+            stacklevel=2,
+        )
+        use_native_claude = False
+
+    if use_native_claude:
+        from .claude_api import run_chat_native  # noqa: PLC0415
+        tools = _collect_tools(
+            enable_local_rag=enable_local_rag,
+            enable_cosmorag=enable_cosmorag,
+            enable_arxiv_mcp=False,  # arXiv MCP is Agno-only for now
+        )
+        run_chat_native(
+            initial_message=initial_message,
+            provider=provider,
+            tools=tools,
+            system=MAIN_AGENT_INSTRUCTIONS,
+        )
+        return
+
+    # --- Agno path ---
+    if new_session or not session_id:
+        session_id = session_id or str(uuid.uuid4())
+        if new_session:
+            session_id = str(uuid.uuid4())
+
+    persistence = "ON" if _db is not None else "OFF"
+    print(f"[DeepEGB] session_id={session_id}  user_id={user_id or '-'}  "
+          f"persistence={persistence}")
+    if _MemoryManager is not None or _SessionSummaryManager is not None:
+        if _db is not None:
+            print("[DeepEGB] Note: post-turn memory/session updates may take "
+                  "extra time on local models.")
+
     agent = build_agent_team(
         provider=provider,
         enable_arxiv_mcp=enable_arxiv_mcp,
         enable_local_rag=enable_local_rag,
+        enable_cosmorag=enable_cosmorag,
+        session_id=session_id,
+        user_id=user_id,
+        new_session=new_session,
     )
     if initial_message:
+        _reset_loop_guard()
         _agent_say(agent, initial_message, plain=plain)
         if not __import__("sys").stdin.isatty():
             return     # one-shot mode under -m
@@ -504,4 +855,5 @@ def run_chat(
             continue
         if msg in {"/exit", "/quit", ":q"}:
             break
+        _reset_loop_guard()
         _agent_say(agent, msg, plain=plain)

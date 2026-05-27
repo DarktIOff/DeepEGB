@@ -318,17 +318,41 @@ def relic_gw(v_expr: str, xi_expr: str | None, N_pivot: float | None,
               help="Disable the arXiv MCP tools.")
 @click.option("--no-rag", is_flag=True, default=False,
               help="Disable the local-RAG `retrieve_literature` tool.")
+@click.option("--no-cosmorag", is_flag=True, default=False,
+              help="Disable CosmoRAG tools (search, add paper, etc.).")
+@click.option("--native-claude", is_flag=True, default=False,
+              help="Use the Anthropic SDK directly (bypasses Agno). "
+                   "Requires --provider anthropic. Enables prompt caching "
+                   "and direct streaming. Also triggered by "
+                   "DEEPEGB_USE_NATIVE_CLAUDE=1.")
 @click.option("--plain", is_flag=True, default=False,
               help="Plain text streaming (no Rich live panel). "
                    "Scrollable, redirectable.")
+@click.option("--session-id", default=None, type=str,
+              help="Resume an existing session by ID.")
+@click.option("--user-id", default=None, type=str,
+              help="User identity for memory and session tracking.")
+@click.option("--new-session", is_flag=True, default=False,
+              help="Force a fresh session (ignores --session-id).")
 def chat(provider: str | None, message: str | None,
-         no_arxiv: bool, no_rag: bool, plain: bool) -> None:
-    """Interactive chat with the DeepEGB agent."""
+         no_arxiv: bool, no_rag: bool, no_cosmorag: bool,
+         native_claude: bool, plain: bool,
+         session_id: str | None, user_id: str | None,
+         new_session: bool) -> None:
+    """Interactive chat with the DeepEGB agent.
+
+    Use --provider anthropic --native-claude to drive Claude directly via
+    the Anthropic SDK with prompt caching and streaming (no Agno layer).
+    All DeepEGB and CosmoRAG tools are available in both modes.
+    """
     from .agent import run_chat
     run_chat(
         initial_message=message, provider=provider,
         enable_arxiv_mcp=not no_arxiv, enable_local_rag=not no_rag,
-        plain=plain,
+        enable_cosmorag=not no_cosmorag,
+        use_native_claude=native_claude or None,
+        plain=plain, session_id=session_id, user_id=user_id,
+        new_session=new_session,
     )
 
 
