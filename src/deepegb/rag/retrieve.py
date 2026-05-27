@@ -20,6 +20,8 @@ from .index import (
     load_index,
 )
 
+_index_cache: dict[str, Any] = {}
+
 
 @dataclass
 class RetrievalHit:
@@ -66,7 +68,11 @@ def hybrid_retrieve(
     pool    : candidate pool size from each retriever before merging.
     alpha   : weight on dense score (1.0 = pure dense, 0.0 = pure BM25).
     """
-    idx = load_index(index_dir)
+    idx_key = str(Path(index_dir).expanduser().resolve())
+    idx = _index_cache.get(idx_key)
+    if idx is None:
+        idx = load_index(index_dir)
+        _index_cache[idx_key] = idx
     chunks: list[Chunk] = idx["chunks"]
     if not chunks:
         return []

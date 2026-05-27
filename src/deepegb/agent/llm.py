@@ -91,7 +91,7 @@ def get_model(provider: str | None = None) -> Any:
     """
     cfg = resolve_provider(provider)
     max_tokens = int(_env("DEEPEGB_LLM_MAX_TOKENS", default="8192"))
-    temperature = float(_env("DEEPEGB_LLM_TEMPERATURE", default="0.4"))
+    temperature = float(_env("DEEPEGB_LLM_TEMPERATURE", default="0.25"))
 
     if cfg.name in ("local", "openai", "zai"):
         if OpenAIChat is None:

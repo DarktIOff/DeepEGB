@@ -10,6 +10,7 @@ Disk layout under `index_dir`:
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 import pickle
@@ -40,9 +41,14 @@ class IndexMeta:
 # ---------------------------------------------------------------------------
 # Embedding
 # ---------------------------------------------------------------------------
+@functools.lru_cache(maxsize=2)
 def _load_embedder(model_name: str):
     from sentence_transformers import SentenceTransformer  # lazy
-    return SentenceTransformer(model_name)
+    # Offline-first: skip HF network checks when model is already cached.
+    try:
+        return SentenceTransformer(model_name, local_files_only=True)
+    except OSError:
+        return SentenceTransformer(model_name)
 
 
 def embed_texts(texts: list[str], model_name: str = DEFAULT_MODEL,
