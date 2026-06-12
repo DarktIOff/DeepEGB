@@ -3,8 +3,12 @@
 Single production stack:
   - egb_slow_roll.py    EGBModel + φ-trajectory utilities (no toy observables)
   - egb_background.py   Full Friedmann + KG ODE integration (solve_ivp)
-  - egb_perturbations.py Slow-roll closed-form observables w/ full c_T², c_S²
+  - egb_n3lo.py          Analytic N3LO observables (Green's-function exact
+                         coefficients; production analytic path)
+  - egb_perturbations.py Observable pipeline (n3lo → MS → slow-roll fallback)
   - egb_modes.py         Mukhanov-Sasaki mode integration (P_T, P_S exact)
+  - egb_uaa.py           Uniform-asymptotic-approximation observables
+                         (cross-check only — carries a ~0.15% method residual)
   - n_pivot.py           Self-consistent N_pivot computation (Liddle-Leach)
   - relic_gw.py          Ω_GW(f) h² with detector sensitivity overlay
   - detectors.py         Catalogue of GW experiments and their Ω_GW floors
@@ -12,6 +16,11 @@ Single production stack:
 from .egb_slow_roll import (
     EGBModel,
     end_of_inflation,
+)
+from .egb_n3lo import (
+    compute_observables_n3lo,
+    reduce_sector,
+    sector_grids,
 )
 from .egb_perturbations import (
     FullObservables,
@@ -74,6 +83,10 @@ __all__ = [
     # Core data types and trajectory
     "EGBModel",
     "end_of_inflation",
+    # Analytic N3LO observables (production analytic path)
+    "compute_observables_n3lo",
+    "reduce_sector",
+    "sector_grids",
     # Slow-roll closed-form observables (production)
     "FullObservables",
     "background_at",

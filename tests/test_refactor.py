@@ -460,9 +460,9 @@ class TestTrajectoryPrimaryPath:
         )
 
     def test_primary_path_attempted_and_succeeds(self, starobinsky_gr):
-        """The primary path should be attempted: _observables_from_trajectory
-        is called.  For Starobinsky GR the trajectory succeeds, so we get
-        mode-computed observables."""
+        """With method="ms" the mode-integration path should be attempted:
+        _observables_from_trajectory is called.  (The default method="n3lo"
+        uses the analytic path first — covered in tests/test_egb_n3lo.py.)"""
         from unittest.mock import patch
         with patch(
             "deepegb.physics.egb_perturbations._observables_from_trajectory",
@@ -474,7 +474,8 @@ class TestTrajectoryPrimaryPath:
             mock_primary.side_effect = lambda *a, **kw: _real(*a, **kw)
 
             obs = compute_observables_full(
-                starobinsky_gr, N_pivot=55.0, phi_range=(0.1, 8.0))
+                starobinsky_gr, N_pivot=55.0, phi_range=(0.1, 8.0),
+                method="ms")
 
             # Primary path was attempted at least once
             assert mock_primary.call_count >= 1
@@ -492,7 +493,8 @@ class TestTrajectoryPrimaryPath:
             return_value=None,
         ):
             obs = compute_observables_full(
-                starobinsky_gr, N_pivot=55.0, phi_range=(0.1, 8.0))
+                starobinsky_gr, N_pivot=55.0, phi_range=(0.1, 8.0),
+                method="ms")
 
         # Fallback produced valid results
         assert obs.is_valid
@@ -513,7 +515,8 @@ class TestTrajectoryPrimaryPath:
             side_effect=RuntimeError("ODE diverged"),
         ):
             obs = compute_observables_full(
-                starobinsky_gr, N_pivot=55.0, phi_range=(0.1, 8.0))
+                starobinsky_gr, N_pivot=55.0, phi_range=(0.1, 8.0),
+                method="ms")
 
         assert obs.is_valid
         assert np.isfinite(obs.n_s)
@@ -555,7 +558,7 @@ class TestTrajectoryPrimaryPath:
 
     def test_primary_path_uses_mode_spectra(self, starobinsky_gr):
         """Verify the Mukhanov–Sasaki mode functions are actually invoked
-        by the primary path (not just the slow-roll formulas)."""
+        by the method="ms" path (not just the slow-roll formulas)."""
         from unittest.mock import patch
         with patch(
             "deepegb.physics.egb_modes.tensor_power_spectrum",
@@ -565,7 +568,8 @@ class TestTrajectoryPrimaryPath:
             wraps=scalar_power_spectrum,
         ) as mock_scalar:
             obs = compute_observables_full(
-                starobinsky_gr, N_pivot=55.0, phi_range=(0.1, 8.0))
+                starobinsky_gr, N_pivot=55.0, phi_range=(0.1, 8.0),
+                method="ms")
             # If the primary path succeeded, the mode functions were called
             if obs.is_valid:
                 assert mock_tensor.call_count >= 1, \

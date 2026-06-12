@@ -4,7 +4,7 @@ Full numerical background integration for EGB inflation.
 We solve the Einstein–Klein–Gordon system
 
     3 H² = (1/2)φ̇² + V + 12 H³ ξ̇                                 (F1, Friedmann)
-    M_pl²(3H² + 2Ḣ) = −(1/2)φ̇² + V + 4 H² ξ̈ + 8 H Ḣ ξ̇         (F2)
+    3H² + 2Ḣ = −(1/2)φ̇² + V + 8 H³ ξ̇ + 8 H Ḣ ξ̇ + 4 H² ξ̈      (F2 = F1 + Ḣ eq)
     φ̈ + 3 H φ̇ + V_,φ + 12 H²(Ḣ + H²) ξ_,φ = 0                    (KG)
 
 (YGS 2018 Eqs. 2.4–2.6; HN 2005 Eqs. 4–5) on a flat FRW background with
@@ -22,7 +22,8 @@ Algebra at every step
 Set u ≡ d/dN.  Then φ̇ = H π, φ̈ = H²(uπ + π·(uH)/H) and we use uH/H = −ε₁.
 
 KG (rewritten in N):     uπ + (3 − ε₁) π + V_,φ/H² + 12 ξ_,φ (1 − ε₁) H² = 0
-F2 − F1 simplified:      Ḣ = (1/2)·[ −φ̇² + 4 H² ξ̈ + 8 H Ḣ ξ̇ ]
+Ḣ equation (from d/dt of F1 combined with KG — exact):
+                         2 Ḣ = −φ̇² + 8 ξ̇ H Ḣ − 4 ξ̇ H³ + 4 ξ̈ H²
                               with ξ̈ = ξ_,φφ φ̇² + ξ_,φ φ̈
 
 Combining gives a 2×2 linear system for (uπ, ε₁) at each grid point. We
@@ -71,8 +72,13 @@ def hubble_from_constraint(V: float, xi_p: float, pi: float,
     if disc < 0:
         return float("nan")
     sq = np.sqrt(disc)
+    # Numerically stable roots: q = −(B + sign(B)√disc)/2, x = q/A and V/q.
+    # The naive (−B − √disc)/(2A) cancels catastrophically when |4AV| ≪ B²
+    # (i.e. tiny GB coupling), corrupting H by orders of magnitude.
+    q = -0.5 * (B + np.copysign(sq, B))
     cands_x: list[float] = []
-    for x in ((-B + sq) / (2.0 * A), (-B - sq) / (2.0 * A)):
+    for x in ((q / A) if A != 0 else float("nan"),
+              (V / q) if q != 0 else float("nan")):
         if x > 0 and np.isfinite(x):
             cands_x.append(x)
     if not cands_x:
@@ -109,8 +115,11 @@ def _step_rhs(model: EGBModel, phi: float, pi: float) -> tuple[float, float, dic
     #   φ̇ = π H,   φ̈ = H²(uπ − π ε₁),   Ḣ = −ε₁ H²,
     #   ξ̇ = ξ_,φ π H,   ξ̈ = H²[ξ_,φφ π² + ξ_,φ(uπ − π ε₁)].
     # KG (÷H²):    uπ + (−π − 12 H² ξ_,φ) ε₁ = −3π − V_,φ/H² − 12 H² ξ_,φ
-    # F2−F1 (÷H²):  4 H² ξ_,φ · uπ + (2 − 12 H² ξ_,φ π) ε₁
-    #                              = π²(1 − 4 H² ξ_,φφ) + 12 H² ξ_,φ π
+    # Ḣ eq (÷H²):  4 H² ξ_,φ · uπ + (2 − 12 H² ξ_,φ π) ε₁
+    #                              = π²(1 − 4 H² ξ_,φφ) + 4 H² ξ_,φ π
+    # (The last term is +4 H² ξ_,φ π, from the −4 ξ̇ H³ piece of the exact
+    #  Ḣ equation 2Ḣ = −φ̇² + 8ξ̇HḢ − 4ξ̇H³ + 4ξ̈H²; it implies the flow
+    #  identity φ̇²/H² = 2ε₁ − δ₁ − δ₁ε₁ + δ₁δ₂ used by egb_n3lo.)
     # GR limit (ξ_,φ → 0, ξ_,φφ → 0):
     #   ε₁ = π²/2,   uπ + (3 − ε₁) π + V_,φ/H² = 0.
     H2 = H * H
@@ -120,7 +129,7 @@ def _step_rhs(model: EGBModel, phi: float, pi: float) -> tuple[float, float, dic
 
     a21 = 4.0 * H2 * xip
     a22 = 2.0 - 12.0 * H2 * xip * pi
-    b2 = pi * pi * (1.0 - 4.0 * H2 * xipp) + 12.0 * H2 * xip * pi
+    b2 = pi * pi * (1.0 - 4.0 * H2 * xipp) + 4.0 * H2 * xip * pi
 
     M = np.array([[a11, a12], [a21, a22]], dtype=float)
     rhs = np.array([b1, b2], dtype=float)
@@ -133,6 +142,92 @@ def _step_rhs(model: EGBModel, phi: float, pi: float) -> tuple[float, float, dic
     aux = {"H": H, "V": V, "Vp": Vp, "Vpp": Vpp, "xip": xip, "xipp": xipp,
            "phidot": phidot}
     return upi, eps1, aux
+
+
+# ---------------------------------------------------------------------------
+# Vectorised per-step algebra over whole (φ, π) grids.
+# ---------------------------------------------------------------------------
+def step_rhs_grid(model: EGBModel, phi: np.ndarray,
+                  pi: np.ndarray) -> dict[str, np.ndarray]:
+    """Vectorised `_step_rhs` over arrays: exact (uπ, ε₁, H, …) per point.
+
+    Identical algebra to `_step_rhs` (same Friedmann-root selection and
+    2×2 linear system, solved via Cramer's rule), evaluated with numpy
+    array operations.  Requires model.V / model.xi to accept arrays; if
+    they don't, falls back to the scalar loop transparently.
+
+    Returns dict with keys: upi, eps1, H, V, Vp, Vpp, xip, xipp, phidot.
+    """
+    phi = np.asarray(phi, dtype=float)
+    pi = np.asarray(pi, dtype=float)
+    h = model.h
+    try:
+        V = np.asarray(model.V(phi), dtype=float) + 0.0 * phi
+        Vp = np.asarray(model.V_phi(phi), dtype=float) + 0.0 * phi
+        Vpp = np.asarray(model.V_phiphi(phi), dtype=float) + 0.0 * phi
+        xip = np.asarray(model.xi_phi(phi), dtype=float) + 0.0 * phi
+        xipp = np.asarray((model.xi(phi + h) - 2.0 * model.xi(phi)
+                           + model.xi(phi - h)) / (h * h),
+                          dtype=float) + 0.0 * phi
+        if V.shape != phi.shape:
+            raise ValueError("model not vectorised")
+    except Exception:
+        # Scalar fallback: loop over _step_rhs.
+        n = phi.size
+        out = {k: np.full(n, np.nan) for k in
+               ("upi", "eps1", "H", "V", "Vp", "Vpp", "xip", "xipp",
+                "phidot")}
+        for i in range(n):
+            upi, eps1, aux = _step_rhs(model, float(phi[i]), float(pi[i]))
+            out["upi"][i] = upi
+            out["eps1"][i] = eps1
+            for k in ("H", "V", "Vp", "Vpp", "xip", "xipp"):
+                out[k][i] = aux.get(k, np.nan)
+            out["phidot"][i] = aux.get("phidot", np.nan)
+        return out
+
+    nan = np.nan
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        # --- Friedmann root (mirrors hubble_from_constraint) ---
+        denom = 3.0 - 0.5 * pi * pi
+        H2_GR = np.where((V > 0) & (denom > 0), V / denom, nan)
+        H_GR = np.sqrt(H2_GR)
+        A = 12.0 * xip * pi
+        B = 0.5 * pi * pi - 3.0
+        disc = B * B - 4.0 * A * V
+        sq = np.sqrt(np.where(disc >= 0, disc, nan))
+        A_safe = np.where(np.abs(A) > 0, A, nan)
+        # Numerically stable quadratic roots (see hubble_from_constraint).
+        qq = -0.5 * (B + np.copysign(sq, B))
+        qq_safe = np.where(np.abs(qq) > 0, qq, nan)
+        x1 = qq / A_safe
+        x2 = V / qq_safe
+        # pick the positive root whose sqrt is closest to the GR seed
+        d1_ = np.where((x1 > 0) & np.isfinite(x1),
+                       np.abs(np.sqrt(np.abs(x1)) - H_GR), np.inf)
+        d2_ = np.where((x2 > 0) & np.isfinite(x2),
+                       np.abs(np.sqrt(np.abs(x2)) - H_GR), np.inf)
+        x_pick = np.where(d1_ <= d2_, x1, x2)
+        H_quad = np.sqrt(np.where(x_pick > 0, x_pick, nan))
+        H = np.where(np.abs(A) < 1.0e-14, H_GR, H_quad)
+        H = np.where((V > 0) & (denom > 0), H, nan)
+
+        H2 = H * H
+        phidot = pi * H
+
+        # --- 2×2 linear system (Cramer), identical to _step_rhs ---
+        a12 = -pi - 12.0 * H2 * xip
+        b1 = -3.0 * pi - Vp / H2 - 12.0 * H2 * xip
+        a21 = 4.0 * H2 * xip
+        a22 = 2.0 - 12.0 * H2 * xip * pi
+        b2 = pi * pi * (1.0 - 4.0 * H2 * xipp) + 4.0 * H2 * xip * pi
+        det = a22 - a12 * a21          # a11 = 1
+        det = np.where(np.abs(det) > 0, det, nan)
+        upi = (b1 * a22 - a12 * b2) / det
+        eps1 = (b2 - a21 * b1) / det
+
+    return dict(upi=upi, eps1=eps1, H=H, V=V, Vp=Vp, Vpp=Vpp,
+                xip=xip, xipp=xipp, phidot=phidot)
 
 
 # ---------------------------------------------------------------------------
@@ -233,15 +328,11 @@ def integrate_background(
     phi_grid = Y[0]
     pi_grid = Y[1]
 
-    H_grid = np.empty_like(N_grid)
-    eps1_grid = np.empty_like(N_grid)
-    delta1_grid = np.empty_like(N_grid)
-    for i in range(N_grid.size):
-        upi, eps1, aux = _step_rhs(model, float(phi_grid[i]), float(pi_grid[i]))
-        H_grid[i] = aux.get("H", np.nan)
-        eps1_grid[i] = eps1
-        # δ₁ = 4 ξ̇ H = 4 ξ_,φ φ̇ H = 4 ξ_,φ π H²
-        delta1_grid[i] = 4.0 * aux.get("xip", np.nan) * pi_grid[i] * (H_grid[i] ** 2)
+    g = step_rhs_grid(model, phi_grid, pi_grid)
+    H_grid = g["H"]
+    eps1_grid = g["eps1"]
+    # δ₁ = 4 ξ̇ H = 4 ξ_,φ φ̇ H = 4 ξ_,φ π H²
+    delta1_grid = 4.0 * g["xip"] * pi_grid * (H_grid ** 2)
 
     a_grid = np.exp(N_grid)             # a/a_init
     # Conformal time τ: dτ = dt/a, dt = dN/H ⇒ dτ = dN/(a H)

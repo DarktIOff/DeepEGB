@@ -112,36 +112,52 @@ def precompute_mode_inputs(model: EGBModel,
     This eliminates the leading source of c_S² error without changing the
     formula itself.
     """
-    n = traj.N.size
+    from .egb_n3lo import _analytic_grids, sector_grids
+
     G_T = 1.0 - traj.delta1
-    c_T2 = np.empty(n)
-    c_S2 = np.empty(n)
-    for i, p in enumerate(traj.phi):
-        c_T2[i] = compute_c_T2(model, float(p),
-                                eps=float(traj.eps1[i]),
-                                delta1=float(traj.delta1[i]))
-        xip_i = float(model.xi_phi(float(p)))
-        c_S2[i] = compute_c_S2(model, float(p),
-                                eps=float(traj.eps1[i]),
-                                delta1=float(traj.delta1[i]),
-                                H=float(traj.H[i]),
-                                xip=xip_i)
-    # Replace bad entries with linear interpolation from neighbours.
-    for arr in (G_T, c_T2, c_S2):
+    # Exact sector quantities (z, c²) from the analytic background grids;
+    # see egb_n3lo.sector_grids (WZW 2017 Eqs. 2.8–2.12).  In particular
+    # the scalar z_R is the exact EGB expression, not the k-inflation
+    # form 2a²ε₁/c_S² (they differ at O(δ₁)).
+    ag = _analytic_grids(model, traj)
+    sg_S = sector_grids(model, traj, "scalar", ag=ag)
+    sg_T = sector_grids(model, traj, "tensor", ag=ag)
+    if sg_S is not None and sg_T is not None:
+        c_T2 = np.array(sg_T["c2"], dtype=float)
+        c_S2 = np.array(sg_S["c2"], dtype=float)
+        g_T = _smooth_ln(sg_T["z"])
+        g_S = _smooth_ln(sg_S["z"])
+    else:
+        # Fallback: slow-roll closed forms (legacy path)
+        n = traj.N.size
+        c_T2 = np.empty(n)
+        c_S2 = np.empty(n)
+        for i, p in enumerate(traj.phi):
+            c_T2[i] = compute_c_T2(model, float(p),
+                                    eps=float(traj.eps1[i]),
+                                    delta1=float(traj.delta1[i]))
+            c_S2[i] = compute_c_S2(model, float(p),
+                                    eps=float(traj.eps1[i]),
+                                    delta1=float(traj.delta1[i]))
+        for arr in (G_T, c_T2, c_S2):
+            bad = ~np.isfinite(arr) | (arr <= 0)
+            if bad.any() and (~bad).sum() > 1:
+                arr[bad] = np.interp(traj.N[bad], traj.N[~bad], arr[~bad])
+            else:
+                arr[bad] = 1.0
+        g_T = traj.N + 0.5 * _smooth_ln(G_T)
+        eps = np.maximum(traj.eps1, 1.0e-30)
+        g_S = traj.N + 0.5 * _smooth_ln(2.0 * eps / np.maximum(c_S2, 1.0e-30))
+
+    # Guard the sound-speed grids against isolated bad points.
+    for arr in (c_T2, c_S2):
         bad = ~np.isfinite(arr) | (arr <= 0)
         if bad.any() and (~bad).sum() > 1:
             arr[bad] = np.interp(traj.N[bad], traj.N[~bad], arr[~bad])
-        else:
+        elif bad.any():
             arr[bad] = 1.0
 
-    # Tensor: g_T = N + (1/2) ln G_T  (since a/a_init = e^N ⇒ ln a = N).
-    g_T = traj.N + 0.5 * _smooth_ln(G_T)
     g_T_N, g_T_NN = _N_derivatives(traj.N, g_T)
-
-    # Scalar: g_S = N + (1/2) ln (2 ε₁ / c_S²)
-    eps = np.maximum(traj.eps1, 1.0e-30)
-    g_S_arg = 2.0 * eps / np.maximum(c_S2, 1.0e-30)
-    g_S = traj.N + 0.5 * _smooth_ln(g_S_arg)
     g_S_N, g_S_NN = _N_derivatives(traj.N, g_S)
 
     one_minus_eps = 1.0 - traj.eps1
@@ -313,17 +329,16 @@ def scalar_power_spectrum(
 ) -> tuple[np.ndarray, list[ModeResult]]:
     """P_S(k) for an array of comoving wavenumbers k.
 
-    P_S(k) = (k³/2π²) |R_k|² with |R_k|² = |v_S|²/z_S² and z_S² = 2 a² ε₁/c_S².
+    P_S(k) = (k³/2π²) |R_k|² with |R_k|² = |v_S|²/z_S², where z_S = e^{g_S}
+    is the exact EGB scalar mode normalisation (z_R of WZW 2017 Eq. 2.8;
+    reduces to the k-inflation form 2a²ε₁/c_S² in the GR limit).
     """
     if traj is None:
         traj = integrate_with_pivot(model, N_pivot=N_pivot)
         if traj is None:
             return np.full_like(k_array, np.nan, dtype=float), []
     interp = precompute_mode_inputs(model, traj)
-    a_end = float(traj.a[-1])
-    eps_end = float(traj.eps1[-1])
-    cS2_end = float(interp.c_S2[-1])
-    zS2_end = 2.0 * a_end * a_end * eps_end / max(cS2_end, 1.0e-30)
+    zS2_end = float(np.exp(2.0 * interp.g_S[-1]))
 
     P_S = np.empty(k_array.size, dtype=float)
     results: list[ModeResult] = []

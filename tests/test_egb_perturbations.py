@@ -79,16 +79,18 @@ def test_quadratic_GR_nsr_consistency():
 def test_consistency_relation_GR_starobinsky():
     obs = compute_observables_full(_gr_starobinsky(), N_pivot=55.0,
                                    phi_range=(0.1, 8.0), n_grid=4001)
-    # GR consistency: r/(-8 n_T) = 1
+    # GR consistency r = -8 n_T holds at LEADING order only; the N3LO
+    # path resolves the genuine NLO deviation ≈ C ε₂ ≈ -0.73·0.037.
     ratio = obs.r / (-8 * obs.n_T)
-    assert abs(ratio - 1.0) < 0.01, ratio
+    assert abs(ratio - 1.0) < 0.06, ratio
 
 
 def test_consistency_relation_GR_quadratic():
     obs = compute_observables_full(_gr_quadratic(), N_pivot=60.0,
                                    phi_range=(-30, 30), n_grid=8001)
     ratio = obs.r / (-8 * obs.n_T)
-    assert abs(ratio - 1.0) < 0.01, ratio
+    # NLO deviation ≈ C ε₂ with ε₂ ≈ 2/(2N+1) ≈ 0.017 ⇒ ~1.5%
+    assert abs(ratio - 1.0) < 0.04, ratio
 
 
 # ---------------------------------------------------------------------------

@@ -203,40 +203,52 @@ def compute_c_T2(
 def compute_c_S2(model: EGBModel, phi: float, *,
                   eps: float | None = None,
                   delta1: float | None = None,
+                  delta2: float | None = None,
                   H: float | None = None,
                   xip: float | None = None) -> float:
-    """Scalar sound speed squared (EGB-corrected, leading order).
+    """Scalar sound speed squared — EXACT expression in flow variables.
 
-    Following Kawai & Soda 1999 (gr-qc/9901002) and the specialisation in
-    Hwang-Noh 2005 of the general scalar-tensor + GB perturbation theory,
-    the scalar sound speed in single-field EGB inflation is, in M_pl = 1:
+    From the exact EGB scalar action (Hwang-Noh 2005; Wu-Zhu-Wang 2017,
+    arXiv:1707.08020 Eq. 2.9), with δ̄ ≡ δ₁/(1−δ₁) and M_pl = 1:
 
-        c_S² = 1  −  4 ξ_,φ² H² / [ ε₁ · (1 − δ₁)² ]   +  𝒪(slow-roll³).
+        c_S² = 1 + [8 δ̄ ξ̇ H Ḣ + 2 δ̄² H² (ξ̈ − ξ̇H)] / (φ̇² + 6 δ̄ ξ̇ H³).
 
-    When called from ``precompute_mode_inputs`` the caller can pass
-    trajectory-exact (H, ε₁, δ₁, ξ_,φ) so the formula is evaluated on
-    the full-background H rather than the slow-roll H²=V/3 seed.
+    Using ξ̇H = δ₁/4, ξ̈ = (δ₁/4)(δ₂+ε₁)·H⁰, Ḣ = −ε₁H² and the exact
+    background identity φ̇²/H² = 2ε₁ − δ₁ − δ₁ε₁ + δ₁δ₂ this becomes
+
+        c_S² = 1 + δ₁·[ −2 δ̄ ε₁ + (δ̄²/2)(δ₂ + ε₁ − 1) ]
+                   / [ 2ε₁ − δ₁ − δ₁ε₁ + δ₁δ₂ + (3/2) δ̄ δ₁ ].
+
+    The deviation from 1 is O(δ₁²/ε₁, δ₁ ε₁) — the previous approximate
+    form (∝ ξ_,φ² H²/ε₁) overestimated it by O(1/ε₁) for steep ξ(φ).
+
+    (H and xip are accepted for backwards compatibility and unused.)
     """
-    if all(v is not None for v in (eps, delta1, H, xip)):
-        if not (np.isfinite(eps) and eps > 0 and np.isfinite(delta1)
-                and np.isfinite(H) and np.isfinite(xip)):
+    bg = None
+    if eps is None or delta1 is None:
+        bg = background_at(model, phi)
+        if not (np.isfinite(bg["eps"]) and bg["eps"] > 0
+                and np.isfinite(bg["delta1"])):
             return np.nan
-        one_minus_d1 = 1.0 - delta1
-        if abs(one_minus_d1) < 1.0e-12:
+        eps = bg["eps"] if eps is None else eps
+        delta1 = bg["delta1"] if delta1 is None else delta1
+    if delta2 is None:
+        if abs(delta1) < 1.0e-14:
+            return 1.0
+        delta2 = _running_dlnX_dN(model, phi, "delta1")
+        if not np.isfinite(delta2):
             return np.nan
-        correction = 4.0 * xip * xip * H * H / (eps * one_minus_d1 * one_minus_d1)
-        return float(1.0 - correction)
-
-    bg = background_at(model, phi)
-    if not (np.isfinite(bg["eps"]) and bg["eps"] > 0 and np.isfinite(bg["delta1"])):
-        return np.nan
-    one_minus_d1 = 1.0 - bg["delta1"]
+    one_minus_d1 = 1.0 - delta1
     if abs(one_minus_d1) < 1.0e-12:
         return np.nan
-    H2 = bg["H"] * bg["H"]
-    xip = bg["xip"]
-    correction = 4.0 * xip * xip * H2 / (bg["eps"] * one_minus_d1 * one_minus_d1)
-    return float(1.0 - correction)
+    dbar = delta1 / one_minus_d1
+    den = (2.0 * eps - delta1 - delta1 * eps + delta1 * delta2
+           + 1.5 * dbar * delta1)
+    if not np.isfinite(den) or den <= 0:
+        return np.nan
+    num = delta1 * (-2.0 * dbar * eps
+                    + 0.5 * dbar * dbar * (delta2 + eps - 1.0))
+    return float(1.0 + num / den)
 
 
 # ---------------------------------------------------------------------------
@@ -494,20 +506,32 @@ def compute_observables_full(
     n_grid: int = 4001,
     dN_for_running: float = 0.5,
     dlnk: float = 0.5,
+    method: str = "n3lo",
 ) -> FullObservables:
     """Compute production-grade observables for an EGB inflation model.
 
     Defaults for N_pivot and phi_range come from the centralized config
     (deepegb.config.defaults.DEFAULTS).
 
-    Primary (exact) path
-    --------------------
+    Primary (analytic N3LO) path — method="n3lo" (default)
+    ------------------------------------------------------
+    Solve the full Friedmann–Klein–Gordon ODE for the background, reduce
+    both perturbation sectors to canonical Mukhanov–Sasaki form exactly,
+    and evaluate the Green's-function N3LO/N4LO closed-form spectra and
+    indices — exact slow-roll coefficients (C = γ_E + ln2 − 2, π², ζ(3);
+    Auclair & Ringeval 2022 master formulas + exact EGB sector mapping).
+    See ``egb_n3lo.compute_observables_n3lo``.  Analytic n_s, n_T, α_s
+    are accurate through third order in the flow parameters; c_S², c_T²
+    are exact.  ~5× faster than mode integration.
+
+    Secondary (Mukhanov–Sasaki) path — method="ms"
+    ----------------------------------------------
     Solve the full Friedmann–Klein–Gordon ODE via ``integrate_with_pivot``
     to obtain the background trajectory.  Then compute P_T(k) and P_S(k)
     using Mukhanov–Sasaki mode integration at the pivot scale k_* and at
     k_* · exp(±dlnk).  Spectral indices n_s, n_T and running α_s are
-    derived from finite differences of ln P in ln k.  This captures all
-    non-slow-roll corrections to the perturbation spectra.
+    derived from finite differences of ln P in ln k.  Used as a
+    cross-check of the analytic path and as its fallback.
 
     Fallback (slow-roll) path
     -------------------------
@@ -526,7 +550,10 @@ def compute_observables_full(
     ----------
     dlnk : float
         Step size in ln k for finite-difference spectral indices in the
-        primary (mode-integration) path.  Default 0.5.
+        mode-integration path.  Default 0.5.
+    method : str
+        "n3lo" (default): analytic N3LO first, then MS, then slow-roll.
+        "ms": skip the analytic path and use mode integration directly.
     """
     from ..config.defaults import DEFAULTS
     if N_pivot is None:
@@ -534,7 +561,18 @@ def compute_observables_full(
     if phi_range is None:
         phi_range = DEFAULTS.phi_range
 
-    # ── Primary (exact) path: full-background ODE + Mukhanov–Sasaki ──
+    # ── Primary (analytic N3LO) path ──
+    if method == "n3lo":
+        try:
+            from .egb_n3lo import compute_observables_n3lo
+            primary = compute_observables_n3lo(
+                model, N_pivot=N_pivot, phi_range=phi_range)
+            if primary is not None:
+                return primary
+        except Exception:
+            pass  # fall through to the MS path
+
+    # ── Secondary path: full-background ODE + Mukhanov–Sasaki ──
     try:
         primary = _observables_from_trajectory(
             model, N_pivot, phi_range, dlnk)
@@ -668,11 +706,11 @@ def chi2_full(
     target_ns: float,
     sigma_ns: float = 0.003,
     target_r: float = 0.0,
-    sigma_r: float = 0.018,
+    sigma_r: float = 0.019,
     target_lnAs: float | None = None,    # ln(10¹⁰ A_s) ≈ 3.044 (Planck)
     sigma_lnAs: float = 0.014,
     target_alphas: float | None = None,
-    sigma_alphas: float = 0.013,
+    sigma_alphas: float = 0.0052,
     target_nT: float | None = None,
     sigma_nT: float = 0.1,
     target_cT2: float | None = None,     # GW170817 forces c_T² ≈ 1 today,
@@ -707,11 +745,11 @@ def chi2_full_with_breakdown(
     target_ns: float,
     sigma_ns: float = 0.003,
     target_r: float = 0.0,
-    sigma_r: float = 0.018,
+    sigma_r: float = 0.019,
     target_lnAs: float | None = None,
     sigma_lnAs: float = 0.014,
     target_alphas: float | None = None,
-    sigma_alphas: float = 0.013,
+    sigma_alphas: float = 0.0052,
     target_nT: float | None = None,
     sigma_nT: float = 0.1,
     target_cT2: float | None = None,
@@ -834,7 +872,7 @@ def chi2_relic_gw(
     target_ns: float,
     sigma_ns: float = 0.003,
     target_r: float = 0.0,
-    sigma_r: float = 0.018,
+    sigma_r: float = 0.019,
     omega_gw_targets: list[tuple[float, float, float]] | None = None,
     omega_gw_band_min: tuple[float, float, float] | None = None,
     N_pivot: float = 55.0,
@@ -867,7 +905,7 @@ def chi2_relic_gw_with_breakdown(
     target_ns: float,
     sigma_ns: float = 0.003,
     target_r: float = 0.0,
-    sigma_r: float = 0.018,
+    sigma_r: float = 0.019,
     omega_gw_targets: list[tuple[float, float, float]] | None = None,
     omega_gw_band_min: tuple[float, float, float] | None = None,
     N_pivot: float = 55.0,
