@@ -340,7 +340,70 @@ to physical frequency by $f \approx 0.65\times 10^{-15}\,(k/\text{Mpc}^{-1})$ Hz
 References: Watanabe & Komatsu 2006 (astro-ph/0604176); Boyle & Steinhardt
 2008 (astro-ph/0512014); Kuroyanagi et al. 2015 (1407.4785).
 
-## 9.4 GR-limit rejection (search-time)
+### 9.4 `egb_n3lo.py` — analytic N3LO observables (production analytic path)
+
+The default path of `compute_observables_full` (since the N3LO upgrade) is
+fully analytic with **exact** slow-roll coefficients — no WKB / uniform-
+asymptotic residual:
+
+1. **Exact sector reduction.** Both EGB perturbation sectors obey
+   $\mu'' + (c^2 k^2 - z''/z)\mu = 0$ with exact $(z, c)$
+   (Hwang–Noh 2005; Wu–Zhu–Wang, arXiv:1707.08020 Eqs. 2.8–2.12):
+   scalar $z_R^2 = a^2(\dot\phi^2 + 6\bar\delta\dot\xi H^3)/[(1-\bar\delta/2)^2H^2]$,
+   $\bar\delta = \delta_1/(1-\delta_1)$; tensor $z_h^2 = a^2(1-\delta_1)$,
+   with the exact sound speeds $c_R^2$, $c_h^2$.  The sound-time
+   transformation $d\varsigma = c\,d\eta$, $\tilde v = \sqrt{c}\,\mu$,
+   $\tilde z = z\sqrt{c}$ maps each sector exactly onto the canonical
+   problem $d^2\tilde v/d\varsigma^2 + (k^2 - \tilde z''/\tilde z)\tilde v = 0$
+   (verified symbolically).
+
+2. **Effective flow hierarchy from the full background.** With
+   $\tilde{\mathcal H} = d\ln\tilde z/d\varsigma$:
+   $\tilde\varepsilon_1 = 1 - \tilde{\mathcal H}'_\varsigma/\tilde{\mathcal H}^2$,
+   $\tilde\varepsilon_{i+1} = d\ln\tilde\varepsilon_i/d\ln\tilde z$ —
+   computed exactly (numerically) from the full Friedmann–KG trajectory.
+   First-level derivatives are closed-form per point (no finite differences
+   of solver output); higher flow functions come from a local polynomial
+   fit of $\ln\tilde\varepsilon_1(\ln\tilde z)$.
+
+3. **N3LO master formulas** (Auclair & Ringeval, arXiv:2205.12608,
+   vendored as `_n3lo_master.py`): spectra exact through third order and
+   indices through fourth order in the flow expansion, with the exact
+   Green's-function constants $C = \gamma_E + \ln 2 - 2$, $\pi^2$,
+   $\zeta(3)$.  Pivot at $-k\varsigma_\star = 1$ per sector;
+   $P_S = \text{master}(\tilde H_S, \tilde\varepsilon_S)/8$,
+   $P_T = \text{master}(\tilde H_T, \tilde\varepsilon_T)$ (normalisation
+   fixed exactly by the GR limit).
+
+Validation: `tests/test_egb_n3lo.py` pins the path against the
+Mukhanov–Sasaki integrator (amplitudes ≲0.05%, tilts ≲1e-4 absolute) and
+the GR textbook limits.  The corresponding closed-form expressions in
+$(\varepsilon_i, \delta_i)$ — third-order tilts/runnings with exact
+constants — are derived symbolically in
+`scripts/derive_paper_formulas.py` and published in
+[PAPER_FORMULAS.md](PAPER_FORMULAS.md) (+ `docs/paper_formulas.tex`,
+machine-readable cache `outputs/paper_formulas_srepr.py`).  The third-order UAA formulas of Wu–Zhu–Wang are
+implemented in `egb_uaa.py` as a literature cross-check only — the UAA
+carries an irreducible ≈0.15% method residual ($181/36e^3$ normalisation,
+$\ln 3$-type constants), which is why it is not used for inference.
+
+**Corrections shipped with this upgrade** (affect all paths):
+
+* The $\dot H$-equation coefficient in `egb_background._step_rhs` was
+  wrong by a factor 3 on the $O(\delta_1)$ term
+  ($+12 H^2\xi_{,\phi}\pi \to +4 H^2\xi_{,\phi}\pi$, i.e. the
+  $-4\dot\xi H^3$ piece of F2).  The exact background identity
+  $\dot\phi^2/H^2 = 2\varepsilon_1 - \delta_1 - \delta_1\varepsilon_1
+  + \delta_1\delta_2$ now holds to machine precision (regression-tested).
+* `compute_c_S2` now implements the exact scalar sound speed; the legacy
+  approximation $c_S^2 = 1 - 4\xi_{,\phi}^2H^2/[\varepsilon_1(1-\delta_1)^2]$
+  diverged for steep $\xi(\phi)$ (it could report $c_S^2 \approx -12$
+  where the exact value is $1 - O(\delta_1^2)$).
+* The Mukhanov–Sasaki scalar sector now uses the exact EGB $z_R$ for both
+  the effective-mass term and the spectrum normalisation (previously the
+  k-inflation form $2a^2\varepsilon_1/c_S^2$, an $O(\delta_1)$ bias).
+
+## 9.5 GR-limit rejection (search-time)
 
 The action reduces to plain GR when $\xi(\phi) \equiv 0$. Searching for EGB
 inflation models in a space that includes the GR limit defeats the

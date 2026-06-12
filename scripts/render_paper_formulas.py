@@ -1,0 +1,196 @@
+"""Render the cached paper formulas (outputs/paper_formulas_srepr.py)
+into docs/PAPER_FORMULAS.md + docs/paper_formulas.tex.
+
+Display conventions:
+  * terms grouped by total formal flow order (a 1/(2ε₁−δ₁) factor counts
+    as order −1, matching the Wu–Zhu–Wang presentation);
+  * within each order, terms are collected over powers of x ≡ 2ε₁−δ₁;
+  * tilts/runnings shown through total order 3; spectra and r through
+    total order 2 (the full third-order expressions live in the
+    machine-readable cache — they run to thousands of terms).
+
+Run after scripts/derive_paper_formulas.py.
+"""
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+import sympy as sp
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+NSYM = 6
+e = sp.symbols(f"e1:{NSYM+1}", real=True)
+d = sp.symbols(f"d1:{NSYM+1}", real=True)
+C = sp.Symbol("C", real=True)
+Z3 = sp.Symbol("zeta3", positive=True)
+Hs = sp.Symbol("H", positive=True)
+XHAT = 2 * e[0] - d[0]
+_FLOWSET = set(e) | set(d)
+
+ns = {}
+exec((ROOT / "outputs" / "paper_formulas_srepr.py").read_text(), ns)
+EXPRS = {k: sp.sympify(v, locals={"zeta3": Z3}) for k, v in ns["EXPRS"].items()}
+
+
+def flow_degree(t) -> int:
+    deg = sp.Integer(0)
+    for base, ex in t.as_powers_dict().items():
+        if base in _FLOWSET:
+            deg += ex
+        elif getattr(base, "free_symbols", set()) & _FLOWSET:
+            sub = sp.Add.make_args(sp.expand(base))[0]
+            deg += ex * flow_degree(sub)
+    return int(deg)
+
+
+def xhat_power(t) -> int:
+    """Power of (2e1−d1) appearing in term t (negative for denominators)."""
+    for base, ex in t.as_powers_dict().items():
+        if base == XHAT or base == -XHAT or sp.expand(base - XHAT) == 0 \
+                or sp.expand(base + XHAT) == 0:
+            return int(ex)
+    return 0
+
+
+def flow_latex(s: str) -> str:
+    s = re.sub(r"\be_\{(\d)\}", r"\\varepsilon_{\1}", s)
+    s = re.sub(r"\bd_\{(\d)\}", r"\\delta_{\1}", s)
+    s = re.sub(r"\be(\d)\b", r"\\varepsilon_{\1}", s)
+    s = re.sub(r"\bd(\d)\b", r"\\delta_{\1}", s)
+    s = s.replace("zeta3", r"\zeta(3)")
+    s = s.replace(r"\zeta\(3\)", r"\zeta(3)")
+    return s
+
+
+def _as_xhat_fraction(block):
+    """Write a flow expression as poly / (c·x̂^K); return (poly, K, c)."""
+    F = sp.cancel(sp.together(block))
+    num, den = sp.fraction(F)
+    if den == 1:
+        return sp.expand(num), 0, sp.Integer(1)
+    fden = sp.factor(den)
+    # match den = c · (±x̂)^K
+    coeff, k_pow = sp.Integer(1), 0
+    for base, ex in fden.as_powers_dict().items():
+        if getattr(base, "free_symbols", set()) & _FLOWSET:
+            rat = sp.cancel(base / XHAT)
+            if rat.free_symbols & _FLOWSET:
+                return None        # not a pure x̂ power
+            coeff *= rat ** ex
+            k_pow += int(ex)
+        else:
+            coeff *= base ** ex
+    return sp.expand(num / coeff), k_pow, sp.Integer(1)
+
+
+def render(expr, max_order: int) -> str:
+    """Order-by-order LaTeX, each order as one fraction over x̂^K."""
+    expr = sp.expand(expr)
+    groups: dict[int, list] = {}
+    for t in sp.Add.make_args(expr):
+        deg = flow_degree(t)
+        if deg <= max_order:
+            groups.setdefault(deg, []).append(t)
+    x_l = r"\left(2\varepsilon_{1}-\delta_{1}\right)"
+    lines = []
+    for deg in sorted(groups):
+        block = sp.Add(*groups[deg])
+        frac = _as_xhat_fraction(block)
+        if frac is None:
+            lines.append(flow_latex(sp.latex(sp.together(block))))
+            continue
+        poly, K, _ = frac
+        body = flow_latex(sp.latex(poly))
+        if K == 0:
+            lines.append(body)
+        elif K == 1:
+            lines.append(rf"\frac{{{body}}}{{{x_l}}}")
+        else:
+            lines.append(rf"\frac{{{body}}}{{{x_l}^{{{K}}}}}")
+    return "\n\\\\[6pt]&\\quad+\\;".join(lines)
+
+
+SECTIONS = (
+    (r"n_s-1", sp.expand(EXPRS["n_s"] - 1), 3,
+     "scalar tilt (error $O(\\epsilon^4)$)"),
+    (r"n_T", EXPRS["n_T"], 3, "tensor tilt (error $O(\\epsilon^4)$)"),
+    (r"\alpha_s \equiv dn_s/d\ln k", EXPRS["alpha_s"], 3,
+     "running of the scalar tilt"),
+    (r"\alpha_T \equiv dn_T/d\ln k", EXPRS["alpha_t"], 3,
+     "running of the tensor tilt"),
+    (r"P_S\,\cdot\,4\pi^2/H_*^2", EXPRS["P_S_red"], 1,
+     "scalar amplitude through second relative order "
+     "(third order in the machine-readable cache)"),
+    (r"P_T\,\cdot\,\pi^2/(2H_*^2)", EXPRS["P_T_red"], 2,
+     "tensor amplitude through second order "
+     "(third order in the cache)"),
+    (r"r \equiv P_T/P_S", EXPRS["r"], 2,
+     "tensor-to-scalar ratio through second order "
+     "(third order in the cache)"),
+)
+
+HEADER = r"""# EGB inflation observables at third order in the slow-roll hierarchy
+
+Exact-coefficient closed forms with the Green's-function constants
+$C=\gamma_E+\ln 2-2\approx-0.7296$, $\pi^2$, $\zeta(3)$.
+Generated by `scripts/derive_paper_formulas.py` +
+`scripts/render_paper_formulas.py` — do not edit by hand.
+Machine-readable (full third-order) expressions:
+`outputs/paper_formulas_srepr.py`.
+
+**Action** ($M_{\rm pl}=1$):
+$S=\int d^4x\sqrt{-g}\,[R/2-\tfrac12(\partial\phi)^2-V(\phi)
+-\tfrac12\xi(\phi)\mathcal G]$.
+
+**Flow variables**, all evaluated at the Hubble-crossing pivot $k=aH$:
+$\varepsilon_1=-\dot H/H^2$, $\delta_1=4\dot\xi H$,
+$\varepsilon_{i+1}=d\ln\varepsilon_i/dN$,
+$\delta_{i+1}=d\ln\delta_i/dN$.
+
+**Method.** Both EGB perturbation sectors obey
+$\mu''+(c^2k^2-z''/z)\mu=0$ with the exact $(z,c)$ of
+Hwang–Noh / Wu–Zhu–Wang (arXiv:1707.08020, Eqs. 2.8–2.12); the exact
+background identity $\dot\phi^2/H^2=2\varepsilon_1-\delta_1
+-\delta_1\varepsilon_1+\delta_1\delta_2$ eliminates $\dot\phi$.
+The sound-time map $d\varsigma=c\,d\eta$, $\tilde z=z\sqrt{c}$ reduces
+each sector exactly to canonical form, on which the Green's-function
+N3LO master of Auclair & Ringeval (arXiv:2205.12608) applies; each
+sector is evaluated at its own point $-k\varsigma=1$ and Lie-shifted to
+the common pivot $k=aH$.  Truncation at total flow order 3 is the ONLY
+approximation.  Terms are grouped by ascending total flow order
+(a factor $1/(2\varepsilon_1-\delta_1)$ counts as order $-1$, as in
+Wu–Zhu–Wang); within an order they are collected over powers of
+$2\varepsilon_1-\delta_1$.
+
+**Checks.** (i) GR limit ($\delta_i\to0$) reproduces the Stewart–Lyth /
+Auclair–Ringeval expansion exactly (symbolic difference zero).
+(ii) Against the numerical N3LO engine (exact effective-flow mapping)
+the formulas agree to $10^{-6}$–$10^{-8}$ relative on $n_s$, $n_T$,
+$r$, $P_S$, $P_T$ for GR Starobinsky, the ACT best-fit
+Starobinsky+$\xi_0\phi$ model, and a strong-coupling EGB model
+($\delta_1\simeq10^{-3}$) — the expected $O(\epsilon^4)$ truncation
+residual.
+"""
+
+md = [HEADER]
+tex = [
+    "% Auto-generated by scripts/render_paper_formulas.py\n",
+    "% EGB observables, exact-coefficient slow-roll closed forms\n",
+    "% C = EulerGamma + ln 2 - 2\n",
+]
+for title, expr, max_o, note in SECTIONS:
+    body = render(expr, max_o)
+    md.append(f"\n## ${title}$\n\n*{note}*\n\n"
+              f"$$\n\\begin{{aligned}}\n&{body}\n\\end{{aligned}}\n$$\n")
+    tex.append(f"\n% ---- {title} ({note}) ----\n"
+               f"\\begin{{align}}\n{title} &= {body}\n\\end{{align}}\n")
+
+(ROOT / "docs" / "PAPER_FORMULAS.md").write_text("".join(md))
+(ROOT / "docs" / "paper_formulas.tex").write_text("".join(tex))
+size_md = (ROOT / "docs" / "PAPER_FORMULAS.md").stat().st_size
+print(f"written docs/PAPER_FORMULAS.md ({size_md/1024:.0f} kB) "
+      "and docs/paper_formulas.tex")
