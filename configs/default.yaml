@@ -105,17 +105,30 @@ search:
       - "xi0 * sign(phi) * sqrt(abs(phi))"               # fractional power
 
 targets:
-  # ACT DR6 reference (used in DeepInflation example).
+  # Scalar tilt: n_s = 0.9752 ± 0.0030 (68%, P-ACT-LBDR2 = ACT DR6 + Planck
+  # + CMB lensing + DESI DR2 BAO; Calabrese et al. 2025, arXiv:2503.14454,
+  # §8.1 / L25). At pivot k* = 0.05 Mpc^-1.
   ns: 0.9752
   ns_sigma: 0.0030
-  r: 0.025
-  r_sigma: 0.013
-  # Planck 2018: ln(10^10 A_s) = 3.044 ± 0.014
+  # Tensor-to-scalar ratio: experimental result is an UPPER LIMIT,
+  # r_0.05 < 0.038 (95%, P-ACT-LB + BK18; arXiv:2503.14454 §4.4).
+  # Encoded as a Gaussian about 0 with sigma = 0.019 so the 95% limit
+  # sits at 2 sigma. Do NOT set a nonzero r target — that would actively
+  # steer the search toward a fake detection.
+  r: 0.0
+  r_sigma: 0.019
+  # Planck 2018: ln(10^10 A_s) = 3.044 ± 0.014 (ACT DR6 is consistent;
+  # the amplitude calibration still anchors to Planck/Sroll2 tau).
   # Including A_s in the search loss ensures PySR discovers models with
   # approximately correct amplitude, avoiding catastrophic post-hoc
   # normalisation (V→λV, ξ→ξ/λ with λ ~ 10^-10).
   lnAs: 3.044
   lnAs_sigma: 0.014
+  # Running of the tilt: dn_s/dlnk = 0.0062 ± 0.0052 (68%, P-ACT-LB;
+  # arXiv:2503.14454 Eq. 2). Optional in the chi^2 (set alphas to null
+  # to drop); the analytic N3LO path provides alpha_s at third order.
+  alphas: 0.0062
+  alphas_sigma: 0.0052
 
 # Default xi expression — must be non-trivial (no GR default).
 # Used by analyze, plot, and CLI commands as the default coupling.

@@ -93,10 +93,12 @@ class _SearchDefaults:
 class _TargetDefaults:
     ns: float
     ns_sigma: float
-    r: float
+    r: float          # 0.0 — experimental r is an upper limit (see YAML)
     r_sigma: float
     lnAs: float | None
     lnAs_sigma: float
+    alphas: float | None
+    alphas_sigma: float
 
 
 @dataclass(frozen=True)
@@ -184,12 +186,17 @@ def _build_defaults(raw: dict[str, Any]) -> Defaults:
             seed_expressions_xi=tuple(seed_xi) if isinstance(seed_xi, list) else (),
         ),
         targets=_TargetDefaults(
+            # ACT DR6: P-ACT-LBDR2 (arXiv:2503.14454); r is an upper limit
+            # r<0.038 (95%, +BK18) encoded as 0 ± 0.019.
             ns=float(tg.get("ns", 0.9752)),
-            ns_sigma=float(tg.get("ns_sigma", 0.003)),
-            r=float(tg.get("r", 0.025)),
-            r_sigma=float(tg.get("r_sigma", 0.013)),
+            ns_sigma=float(tg.get("ns_sigma", 0.0030)),
+            r=float(tg.get("r", 0.0)),
+            r_sigma=float(tg.get("r_sigma", 0.019)),
             lnAs=float(tg["lnAs"]) if "lnAs" in tg else None,
             lnAs_sigma=float(tg.get("lnAs_sigma", 0.014)),
+            alphas=(float(tg["alphas"])
+                    if tg.get("alphas") is not None else None),
+            alphas_sigma=float(tg.get("alphas_sigma", 0.0052)),
         ),
         gw=_GWDefaults(
             n_decades=float(gw.get("n_decades", 30.0)),

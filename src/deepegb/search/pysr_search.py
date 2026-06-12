@@ -22,12 +22,15 @@ from typing import Callable, Iterable, Optional
 import numpy as np
 import sympy as sp
 
+from ..config.defaults import DEFAULTS
 from ..physics import (
     EGBModel,
     chi2_full,
     chi2_relic_gw,
     compute_observables_full,
 )
+
+_DT = DEFAULTS.targets   # experimental targets (single source of truth)
 
 try:
     from pysr import PySRRegressor
@@ -570,17 +573,19 @@ end
 # ---------------------------------------------------------------------------
 @dataclass
 class SearchConfig:
-    # Mandatory targets
-    target_ns: float = 0.974
-    sigma_ns: float = 0.003
-    target_r: float = 0.0
-    sigma_r: float = 0.018
+    # Mandatory targets — defaults come from configs/default.yaml via
+    # DEFAULTS (ACT DR6 P-ACT-LBDR2; r is the BK18 upper limit encoded
+    # as 0 ± 0.019, see the YAML comments).
+    target_ns: float = _DT.ns
+    sigma_ns: float = _DT.ns_sigma
+    target_r: float = _DT.r
+    sigma_r: float = _DT.r_sigma
 
     # Optional production-grade targets (None ⇒ excluded from χ²)
-    target_lnAs: float | None = None       # ln(10¹⁰ A_s); Planck ≈ 3.044
-    sigma_lnAs: float = 0.014
-    target_alphas: float | None = None     # running of n_s
-    sigma_alphas: float = 0.013
+    target_lnAs: float | None = _DT.lnAs   # ln(10¹⁰ A_s); Planck ≈ 3.044
+    sigma_lnAs: float = _DT.lnAs_sigma
+    target_alphas: float | None = _DT.alphas   # dn_s/dlnk (P-ACT-LB)
+    sigma_alphas: float = _DT.alphas_sigma
     target_nT: float | None = None         # tensor spectral index
     sigma_nT: float = 0.1
     target_cT2: float | None = None        # tensor sound-speed squared
@@ -662,6 +667,13 @@ class SearchConfig:
     # Search strategy
     mode: str = "two_pass"   # "two_pass" or "joint"
     top_k_V: int = 5         # how many V candidates to retain in two-pass mode
+
+    # Parallel re-ranking of candidate (V, ξ) pairs by the production χ²
+    # (the post-PySR Python loops — the wall-clock hotspot of a search).
+    #   0  ⇒ auto: cpu_count − 1 workers when there are ≥ 4 candidates;
+    #   1  ⇒ serial; n>1 ⇒ that many worker processes ("spawn" context,
+    #        so the embedded Julia runtime is never forked).
+    n_jobs: int = 0
 
     # Sampling grid for X data fed to PySR (PySR fits an objective via
     # `loss_function` so X values are largely irrelevant; we still need them).
@@ -791,6 +803,76 @@ def observables_for_result(V_expr: str, xi_expr: str, cfg: SearchConfig) -> dict
             return o.as_dict()
     except Exception:
         return {}
+
+
+# ---------------------------------------------------------------------------
+# Parallel scoring of candidate (V, ξ) pairs.
+# ---------------------------------------------------------------------------
+def _score_pair_worker(args: tuple) -> tuple[str, str, float, dict]:
+    """Worker: production χ² (+ optionally observables) for one pair."""
+    V_str, xi_str, cfg, want_obs = args
+    chi2 = chi2_for_expressions(V_str, xi_str, cfg)
+    obs = observables_for_result(V_str, xi_str, cfg) if want_obs else {}
+    return V_str, xi_str, chi2, obs
+
+
+_SCORING_POOL = None          # persistent spawn pool, created lazily
+_SCORING_POOL_SIZE = 0
+
+
+def _get_scoring_pool(n_jobs: int):
+    """Lazy persistent ProcessPoolExecutor ("spawn" context).
+
+    Workers pay the scipy/sympy import cost once per search run, not once
+    per scoring batch; the pool is reused across the V-ranking pass, the
+    per-V ξ passes, and any joint-refinement rounds.  Spawn (not fork)
+    so the embedded Julia runtime is never inherited.
+    """
+    global _SCORING_POOL, _SCORING_POOL_SIZE
+    if _SCORING_POOL is not None and _SCORING_POOL_SIZE >= n_jobs:
+        return _SCORING_POOL
+    import atexit
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor
+
+    if _SCORING_POOL is not None:
+        _SCORING_POOL.shutdown(wait=False, cancel_futures=True)
+    ctx = mp.get_context("spawn")
+    _SCORING_POOL = ProcessPoolExecutor(max_workers=n_jobs, mp_context=ctx)
+    _SCORING_POOL_SIZE = n_jobs
+    atexit.register(_SCORING_POOL.shutdown, wait=False)
+    return _SCORING_POOL
+
+
+def score_candidate_pairs(
+    pairs: list[tuple[str, str]],
+    cfg: SearchConfig,
+    *,
+    want_obs: bool = True,
+) -> list[tuple[str, str, float, dict]]:
+    """Score (V, ξ) candidate pairs with the production χ², in parallel
+    when cfg.n_jobs allows.
+
+    Uses a persistent "spawn" pool (see `_get_scoring_pool`).  Falls back
+    to serial on any pool failure.  Order matches `pairs`.
+    """
+    import os
+
+    n_jobs = cfg.n_jobs
+    if n_jobs == 0:
+        n_jobs = min(8, max(1, (os.cpu_count() or 2) - 1))
+    args = [(v, x, cfg, want_obs) for v, x in pairs]
+    # Engagement threshold: worker startup (~3 s import, paid once per
+    # run thanks to the persistent pool) vs ~0.25 s per production-χ²
+    # call (analytic N3LO) or ~1–2 s for production_gw.
+    min_batch = 4 if cfg.loss_kind == "production_gw" else 8
+    if n_jobs > 1 and len(pairs) >= min_batch:
+        try:
+            ex = _get_scoring_pool(min(n_jobs, max(2, len(pairs))))
+            return list(ex.map(_score_pair_worker, args, chunksize=1))
+        except Exception:
+            pass  # fall through to serial
+    return [_score_pair_worker(a) for a in args]
 
 
 # ---------------------------------------------------------------------------
@@ -977,11 +1059,11 @@ def run_joint_search(
     log(f"      [V search] Julia loss used: {julia_loss_used}; "
         f"{len(V_candidates)} unique candidates")
 
-    # Re-rank V candidates by EGB χ² (with ξ = 0).
-    V_ranked = sorted(
-        ((vstr, chi2_for_expressions(vstr, "0", cfg)) for vstr in V_candidates),
-        key=lambda it: it[1],
-    )
+    # Re-rank V candidates by EGB χ² (with ξ = 0), in parallel.
+    _scored_V = score_candidate_pairs(
+        [(vstr, "0") for vstr in V_candidates], cfg, want_obs=False)
+    V_ranked = sorted(((v, c) for v, _x, c, _o in _scored_V),
+                      key=lambda it: it[1])
     log(f"      Top V (across families, with ξ=0): " + ", ".join(
         f"{v[:30]}…  χ²={c:.3g}" for v, c in V_ranked[:3]))
 
@@ -1052,9 +1134,9 @@ def run_joint_search(
         log(f"      [ξ search] Julia: {julia_xi_used}; "
             f"{len(xi_candidates)} unique candidates")
 
-        for xi_str in xi_candidates:
-            chi2 = chi2_for_expressions(V_str, xi_str, cfg)
-            obs_dict = observables_for_result(V_str, xi_str, cfg)
+        scored = score_candidate_pairs(
+            [(V_str, xi_str) for xi_str in xi_candidates], cfg)
+        for _v, xi_str, chi2, obs_dict in scored:
             if not obs_dict:
                 continue
 
