@@ -14,6 +14,7 @@ either fix the inputs or fall back to a known-good model.
 from __future__ import annotations
 
 import json
+import numpy as np
 import os
 import traceback
 from pathlib import Path
@@ -144,8 +145,40 @@ def search_egb_potentials(
             suggestion="Loosen target sigmas, raise niterations, or analyze "
                        "a known model directly."
         )
-    payload = [r.as_dict() for r in results[:5]]
-    return json.dumps({"candidates": payload, "config": cfg.to_dict()},
+    # ---- quality gate: never present junk as success -------------------
+    # chi2 ≲ 12 ⇒ all shape observables within ~2σ jointly (viable);
+    # chi2 ≥ 1e5 ⇒ structurally broken model (penalty-dominated).
+    VIABLE_CHI2 = 12.0
+    payload = []
+    for r in results[:5]:
+        d = r.as_dict()
+        d["viable"] = bool(np.isfinite(r.chi2) and r.chi2 < VIABLE_CHI2)
+        payload.append(d)
+    n_viable = sum(p["viable"] for p in payload)
+    best = results[0].chi2
+    if n_viable > 0:
+        quality = "good"
+        quality_msg = (f"{n_viable} viable candidate(s) with chi2 < "
+                       f"{VIABLE_CHI2:.0f}.")
+    elif np.isfinite(best) and best < 1.0e5:
+        quality = "poor"
+        quality_msg = (
+            f"SEARCH DID NOT CONVERGE: best chi2 = {best:.3g} (viable "
+            f"requires < {VIABLE_CHI2:.0f}). Do NOT present these "
+            "candidates as successful fits — report the search as "
+            "unsuccessful and consider more iterations, different seed "
+            "families, or adjusted targets.")
+    else:
+        quality = "failed"
+        quality_msg = (
+            f"SEARCH FAILED: best chi2 = {best:.3g} is penalty-dominated "
+            "(every candidate has a broken background or no valid pivot). "
+            "Report failure to the user; do not present any candidate as "
+            "a result.")
+    return json.dumps({"search_quality": quality,
+                       "quality_note": quality_msg,
+                       "candidates": payload,
+                       "config": cfg.to_dict()},
                       default=str, indent=2)
 
 
@@ -211,6 +244,7 @@ def relic_gw_spectrum_tool(
     T_reh_GeV: float | None = None,
     n_decades: float | None = None,
     n_k: int | None = None,
+    include_arrays: bool = False,
 ) -> str:
     """Compute the relic GW energy density Ω_GW(f) h² across the relic-GW
     frequency band using full background EOMs + Mukhanov-Sasaki + a
@@ -234,11 +268,25 @@ def relic_gw_spectrum_tool(
     if n_k is None:
         n_k = DEFAULTS.n_k
     try:
-        return json.dumps(
-            analyze_egb_relic_gw(V_expr, xi_expr, N=N, n_decades=n_decades,
-                                 n_k=n_k, T_reh_GeV=T_reh_GeV),
-            indent=2, default=str,
-        )
+        res = analyze_egb_relic_gw(V_expr, xi_expr, N=N, n_decades=n_decades,
+                                   n_k=n_k, T_reh_GeV=T_reh_GeV)
+        # Context economy: the headline physics is in detector_summary and
+        # the scalars; decimate the per-k arrays to <= 16 entries unless
+        # the caller explicitly wants them all.
+        if not include_arrays and res.get("valid"):
+            keys = ("k_inflation", "k_today_Mpc_inv", "f_today_Hz",
+                    "P_T", "transfer_sq", "Omega_GW_h2")
+            n_pts = len(res.get("f_today_Hz") or [])
+            if n_pts > 16:
+                step = max(1, n_pts // 16)
+                for key in keys:
+                    arr = res.get(key)
+                    if isinstance(arr, list) and len(arr) == n_pts:
+                        res[key] = arr[::step]
+                res["arrays_decimated"] = (
+                    f"per-k arrays decimated to ~16 points; call with "
+                    f"include_arrays=True for all {n_pts}.")
+        return json.dumps(res, indent=2, default=str)
     except Exception as exc:                                       # noqa: BLE001
         return _tool_error(
             "relic_gw_failure",
@@ -374,19 +422,31 @@ def retrieve_literature_tool(query: str, k: int = 5) -> str:
     """
     try:
         from ..rag import format_hits_for_llm, hybrid_retrieve, index_exists
-    except ImportError:
-        return json.dumps({
-            "error": "RAG dependencies not installed. "
-                     "Run: pip install -e '.[rag]'"
-        })
-    if not index_exists():
-        return json.dumps({
-            "error": "No local RAG index. Build one with "
-                     "`deepegb rag index <folder>` first."
-        })
-    k = max(1, min(int(k), 20))
-    hits = hybrid_retrieve(query, k=k)
-    return format_hits_for_llm(hits)
+        if not index_exists():
+            return _tool_error(
+                "no_rag_index",
+                "No local RAG index has been built.",
+                suggestion="Use cosmorag_search_tool instead (the CosmoRAG "
+                           "knowledge base is usually available), or build "
+                           "the local index with `deepegb rag index <folder>`."
+            )
+        k = max(1, min(int(k), 20))
+        hits = hybrid_retrieve(query, k=k)
+        return format_hits_for_llm(hits)
+    except ImportError as exc:
+        # faiss & friends are imported lazily inside the rag package, so
+        # missing deps surface HERE, not at module import.
+        return _tool_error(
+            "missing_dependency",
+            f"Local RAG dependencies not installed ({exc}).",
+            suggestion="Use cosmorag_search_tool instead — it covers the "
+                       "same literature. (Or `pip install -e '.[rag]'`.)"
+        )
+    except Exception as exc:                                       # noqa: BLE001
+        return _tool_error(
+            "rag_failure", f"{type(exc).__name__}: {exc}",
+            suggestion="Use cosmorag_search_tool instead.",
+        )
 
 
 # ----------------------------------------------------------------------------

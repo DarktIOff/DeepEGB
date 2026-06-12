@@ -103,14 +103,15 @@ def _scan_epsilon(
     return eps
 
 
-def end_of_inflation(
+def end_of_inflation_all(
     model: EGBModel,
     phi_range: tuple[float, float] = (-15.0, 15.0),
     n_grid: int = 4001,
-) -> float | None:
-    """Find φ_end such that ε(φ_end) = 1, choosing the crossing nearest to a
-    valid slow-roll region.  Returns None if no end-of-inflation exists in
-    the given range.
+) -> list[float]:
+    """All φ_end candidates with ε(φ_end) = 1, sorted so that crossings
+    adjacent to the longest contiguous slow-roll plateaus come first.
+    Models can have several inflationary basins (e.g. ±φ for even V);
+    callers should try each.
     """
     phi_grid = np.linspace(*phi_range, n_grid)
     eps = _scan_epsilon(model, phi_grid)
@@ -126,9 +127,9 @@ def end_of_inflation(
             phi_root = phi_grid[i] - a * (phi_grid[i + 1] - phi_grid[i]) / (b - a)
             crossings.append(phi_root)
     if not crossings:
-        return None
+        return []
 
-    # Prefer the crossing adjacent to the longest contiguous slow-roll plateau
+    # Rank by the length of the adjacent contiguous slow-roll plateau
     def score(phi_c: float) -> float:
         below = (eps < 1.0).astype(int)
         idx = int(np.argmin(np.abs(phi_grid - phi_c)))
@@ -144,7 +145,20 @@ def end_of_inflation(
         return run
 
     crossings.sort(key=score, reverse=True)
-    return float(crossings[0])
+    return [float(c) for c in crossings]
+
+
+def end_of_inflation(
+    model: EGBModel,
+    phi_range: tuple[float, float] = (-15.0, 15.0),
+    n_grid: int = 4001,
+) -> float | None:
+    """Find φ_end such that ε(φ_end) = 1, choosing the crossing nearest to a
+    valid slow-roll region.  Returns None if no end-of-inflation exists in
+    the given range.
+    """
+    cands = end_of_inflation_all(model, phi_range=phi_range, n_grid=n_grid)
+    return cands[0] if cands else None
 
 
 def _N_to_phi_table(

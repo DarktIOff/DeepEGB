@@ -91,6 +91,9 @@ def _build_julia_v_loss_source(
     `physics/kernel.jl::egb_chi2_v_only`; we inline it here because PySR's
     `loss_function` doesn't easily import external modules.
     """
+    _ta = cfg.target_alphas if cfg.target_alphas is not None else 0.0
+    _sa = cfg.sigma_alphas
+    _ua = "true" if cfg.target_alphas is not None else "false"
     return f"""
 function deepegb_v_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
     target_ns = T({cfg.target_ns})
@@ -98,6 +101,9 @@ function deepegb_v_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
     target_r  = T({cfg.target_r})
     sigma_r   = T({cfg.sigma_r})
     N_pivot   = T({cfg.N_pivot})
+    target_alpha = T({_ta})
+    sigma_alpha  = T({_sa})
+    use_alpha    = {_ua}
 
     n = size(dataset.X, 2)
     if n < 4
@@ -121,7 +127,7 @@ function deepegb_v_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
     end
     if n_bad > 0
         frac = T(n_bad) / T(n)
-        return L(1.0e3 * (1.0 + 10.0 * frac))
+        return L(1.0e6 * (1.0 + 10.0 * frac))
     end
 
     # Central-difference V', V''.
@@ -167,10 +173,10 @@ function deepegb_v_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
             end
         end
         if !eps_found
-            return L(2.0e3)
+            return L(2.0e6)
         end
         # Graded penalty: smaller |ε−1| ⇒ closer to having an end-of-inflation.
-        return L(2.0e3 * (1.0 + abs(log10(max(abs(eps_min - T(1.0)), T(1e-30))))))
+        return L(2.0e6 * (1.0 + abs(log10(max(abs(eps_min - T(1.0)), T(1e-30))))))
     end
 
     # N(φ) cumulative trapezoid of V/V' (= V/Q with ξ=0).
@@ -206,13 +212,13 @@ function deepegb_v_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
             end
         end
         if !finite_found
-            return L(1.5e3 * 2.0)
+            return L(1.5e6 * 2.0)
         end
         deficit = max(T(0.0), N_pivot - N_max)
-        return L(1.5e3 * (1.0 + deficit / N_pivot))
+        return L(1.5e6 * (1.0 + deficit / N_pivot))
     end
-    if pivot_idx == 1 || pivot_idx == n
-        return L(1.5e3)
+    if pivot_idx <= 2 || pivot_idx >= n - 1
+        return L(1.5e6)
     end
 
     eps_pivot = eps_arr[pivot_idx]
@@ -224,6 +230,15 @@ function deepegb_v_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
 
     chi2 = ((n_s_pred - target_ns) / sigma_ns)^2 +
            ((r_pred   - target_r ) / sigma_r )^2
+
+    if use_alpha
+        # alpha_s = dn_s/dlnk = -(V'/V) dn_s/dphi (xi = 0), with
+        # n_s(phi) = 1 - 6 eps + 2 eta evaluated at pivot +- 1.
+        ns_m = T(1) - T(6)*eps_arr[pivot_idx-1] + T(2)*Vpp[pivot_idx-1]/V_vec[pivot_idx-1]
+        ns_p = T(1) - T(6)*eps_arr[pivot_idx+1] + T(2)*Vpp[pivot_idx+1]/V_vec[pivot_idx+1]
+        alpha_pred = -(Vp[pivot_idx]/V_vec[pivot_idx]) * (ns_p - ns_m) / (2*dphi)
+        chi2 += ((alpha_pred - target_alpha) / sigma_alpha)^2
+    end
 
     return L(chi2)
 end
@@ -239,6 +254,9 @@ def _build_julia_v_loss_with_xi_source(cfg: "SearchConfig", xi_expr: str) -> str
     """
     xi_julia = _sympy_to_julia(xi_expr)
     enforce_egb = "true" if cfg.enforce_egb else "false"
+    _ta = cfg.target_alphas if cfg.target_alphas is not None else 0.0
+    _sa = cfg.sigma_alphas
+    _ua = "true" if cfg.target_alphas is not None else "false"
     return f"""
 function deepegb_v_loss_with_xi(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
     target_ns = T({cfg.target_ns})
@@ -246,6 +264,9 @@ function deepegb_v_loss_with_xi(tree, dataset::Dataset{{T,L}}, options) where {{
     target_r  = T({cfg.target_r})
     sigma_r   = T({cfg.sigma_r})
     N_pivot   = T({cfg.N_pivot})
+    target_alpha = T({_ta})
+    sigma_alpha  = T({_sa})
+    use_alpha    = {_ua}
     egb_min   = T({cfg.egb_min_delta1})
     enforce_egb = {enforce_egb}
 
@@ -275,7 +296,7 @@ function deepegb_v_loss_with_xi(tree, dataset::Dataset{{T,L}}, options) where {{
     end
     if n_bad > 0
         frac = T(n_bad) / T(n)
-        return L(1.0e3 * (1.0 + 10.0 * frac))
+        return L(1.0e6 * (1.0 + 10.0 * frac))
     end
 
     # Central diffs.
@@ -324,9 +345,9 @@ function deepegb_v_loss_with_xi(tree, dataset::Dataset{{T,L}}, options) where {{
             end
         end
         if !eps_found
-            return L(2.0e3)
+            return L(2.0e6)
         end
-        return L(2.0e3 * (1.0 + abs(log10(max(abs(eps_min - T(1)), T(1e-30))))))
+        return L(2.0e6 * (1.0 + abs(log10(max(abs(eps_min - T(1)), T(1e-30))))))
     end
 
     # N(φ).
@@ -362,13 +383,13 @@ function deepegb_v_loss_with_xi(tree, dataset::Dataset{{T,L}}, options) where {{
             end
         end
         if !finite_found
-            return L(1.5e3 * 2.0)
+            return L(1.5e6 * 2.0)
         end
         deficit = max(T(0), N_pivot - N_max)
-        return L(1.5e3 * (1.0 + deficit / N_pivot))
+        return L(1.5e6 * (1.0 + deficit / N_pivot))
     end
-    if pivot_idx == 1 || pivot_idx == n
-        return L(1.5e3)
+    if pivot_idx <= 2 || pivot_idx >= n - 1
+        return L(1.5e6)
     end
 
     eps_pivot = eps_arr[pivot_idx]
@@ -377,13 +398,27 @@ function deepegb_v_loss_with_xi(tree, dataset::Dataset{{T,L}}, options) where {{
     deps_dphi = (eps_arr[pivot_idx+1] - eps_arr[pivot_idx-1]) / (2*dphi)
 
     n_s_pred = T(1) - T(2)*eps_pivot + (Q_pivot/(eps_pivot*V_pivot)) * deps_dphi
-    r_pred   = T(16) * eps_pivot
+    delta1 = -T(4/3) * xip[pivot_idx] * Q_pivot
+    # LO EGB tensor-to-scalar ratio: r = 8(2eps1 - delta1)
+    r_pred   = T(16) * eps_pivot - T(8) * delta1
 
     chi2 = ((n_s_pred - target_ns) / sigma_ns)^2 +
            ((r_pred   - target_r ) / sigma_r )^2
 
+    if use_alpha
+        # alpha_s = -(Q/V) dn_s/dphi with the same flow n_s formula at
+        # pivot +- 1 (dphi/dN = -Q/V along the trajectory).
+        deps_m = (eps_arr[pivot_idx] - eps_arr[pivot_idx-2]) / (2*dphi)
+        deps_p = (eps_arr[pivot_idx+2] - eps_arr[pivot_idx]) / (2*dphi)
+        ns_m = T(1) - T(2)*eps_arr[pivot_idx-1] +
+               (Q[pivot_idx-1]/(eps_arr[pivot_idx-1]*V_vec[pivot_idx-1])) * deps_m
+        ns_p = T(1) - T(2)*eps_arr[pivot_idx+1] +
+               (Q[pivot_idx+1]/(eps_arr[pivot_idx+1]*V_vec[pivot_idx+1])) * deps_p
+        alpha_pred = -(Q_pivot/V_pivot) * (ns_p - ns_m) / (2*dphi)
+        chi2 += ((alpha_pred - target_alpha) / sigma_alpha)^2
+    end
+
     if enforce_egb
-        delta1 = -T(4/3) * xip[pivot_idx] * Q_pivot
         d1abs  = abs(delta1)
         chi2 += T(2.0e3) * exp(-d1abs / max(T(0.5) * egb_min, T(1e-30)))
     end
@@ -405,6 +440,9 @@ def _build_julia_xi_loss_source(cfg: "SearchConfig", V_expr: str) -> str:
     """
     V_julia = _sympy_to_julia(V_expr)
     enforce_egb = "true" if cfg.enforce_egb else "false"
+    _ta = cfg.target_alphas if cfg.target_alphas is not None else 0.0
+    _sa = cfg.sigma_alphas
+    _ua = "true" if cfg.target_alphas is not None else "false"
     return f"""
 function deepegb_xi_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
     target_ns = T({cfg.target_ns})
@@ -412,6 +450,9 @@ function deepegb_xi_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
     target_r  = T({cfg.target_r})
     sigma_r   = T({cfg.sigma_r})
     N_pivot   = T({cfg.N_pivot})
+    target_alpha = T({_ta})
+    sigma_alpha  = T({_sa})
+    use_alpha    = {_ua}
     egb_min   = T({cfg.egb_min_delta1})
     enforce_egb = {enforce_egb}
 
@@ -435,7 +476,7 @@ function deepegb_xi_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
     end
     if n_bad > 0
         frac = T(n_bad) / T(n)
-        return L(1.0e3 * (1.0 + 10.0 * frac))
+        return L(1.0e6 * (1.0 + 10.0 * frac))
     end
 
     # Evaluate ξ(φ) on the same grid via PySR's tree evaluator.
@@ -497,9 +538,9 @@ function deepegb_xi_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
             end
         end
         if !eps_found
-            return L(2.0e3)
+            return L(2.0e6)
         end
-        return L(2.0e3 * (1.0 + abs(log10(max(abs(eps_min - T(1)), T(1e-30))))))
+        return L(2.0e6 * (1.0 + abs(log10(max(abs(eps_min - T(1)), T(1e-30))))))
     end
 
     # N(φ) = integral from φ_end to φ of V/Q dφ via cumulative trapezoid.
@@ -535,13 +576,13 @@ function deepegb_xi_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
             end
         end
         if !finite_found
-            return L(1.5e3 * 2.0)
+            return L(1.5e6 * 2.0)
         end
         deficit = max(T(0), N_pivot - N_max)
-        return L(1.5e3 * (1.0 + deficit / N_pivot))
+        return L(1.5e6 * (1.0 + deficit / N_pivot))
     end
-    if pivot_idx == 1 || pivot_idx == n
-        return L(1.5e3)
+    if pivot_idx <= 2 || pivot_idx >= n - 1
+        return L(1.5e6)
     end
 
     eps_pivot = eps_arr[pivot_idx]
@@ -551,14 +592,28 @@ function deepegb_xi_loss(tree, dataset::Dataset{{T,L}}, options) where {{T,L}}
     # Production-formula n_s: 1 - 2 eps + (Q/(eps*V)) * d_eps/d_phi at pivot.
     deps_dphi = (eps_arr[pivot_idx+1] - eps_arr[pivot_idx-1]) / (2*dphi)
     n_s_pred = T(1) - T(2)*eps_pivot + (Q_pivot / (eps_pivot*V_pivot)) * deps_dphi
-    r_pred   = T(16) * eps_pivot
+    delta1 = -T(4/3) * xip[pivot_idx] * Q_pivot
+    # LO EGB tensor-to-scalar ratio: r = 8(2eps1 - delta1)
+    r_pred   = T(16) * eps_pivot - T(8) * delta1
 
     chi2 = ((n_s_pred - target_ns) / sigma_ns)^2 +
            ((r_pred   - target_r ) / sigma_r )^2
 
     # GR-limit penalty: δ_1 = -(4/3) ξ' Q at the pivot.
+    if use_alpha
+        # alpha_s = -(Q/V) dn_s/dphi with the same flow n_s formula at
+        # pivot +- 1 (dphi/dN = -Q/V along the trajectory).
+        deps_m = (eps_arr[pivot_idx] - eps_arr[pivot_idx-2]) / (2*dphi)
+        deps_p = (eps_arr[pivot_idx+2] - eps_arr[pivot_idx]) / (2*dphi)
+        ns_m = T(1) - T(2)*eps_arr[pivot_idx-1] +
+               (Q[pivot_idx-1]/(eps_arr[pivot_idx-1]*V_vec[pivot_idx-1])) * deps_m
+        ns_p = T(1) - T(2)*eps_arr[pivot_idx+1] +
+               (Q[pivot_idx+1]/(eps_arr[pivot_idx+1]*V_vec[pivot_idx+1])) * deps_p
+        alpha_pred = -(Q_pivot/V_pivot) * (ns_p - ns_m) / (2*dphi)
+        chi2 += ((alpha_pred - target_alpha) / sigma_alpha)^2
+    end
+
     if enforce_egb
-        delta1 = -T(4/3) * xip[pivot_idx] * Q_pivot
         d1abs  = abs(delta1)
         chi2 += T(2.0e3) * exp(-d1abs / max(T(0.5) * egb_min, T(1e-30)))
     end
@@ -647,7 +702,8 @@ class SearchConfig:
         "starobinsky", "hilltop", "pole", "exp_plateau"
     )
     xi_seed_families: tuple[str, ...] = (
-        "exp_decay", "pole", "power_law", "tanh"
+        "exp_decay", "pole", "power_law", "tanh",
+        "steep_exp", "two_component", "gauss_bump",
     )
     # Iterations per family: total wall time scales as
     #   len(v_families) * niterations + top_k_V * len(xi_families) * niterations
@@ -667,6 +723,21 @@ class SearchConfig:
     # Search strategy
     mode: str = "two_pass"   # "two_pass" or "joint"
     top_k_V: int = 5         # how many V candidates to retain in two-pass mode
+
+    # ---- Refinement stage (after passes 1+2, on the top candidates) ----
+    # N-pivot marginalisation: in EGB the GB-modified reheating history
+    # can roughly DOUBLE the GR e-fold budget, so the window is
+    # [N_pivot_min, N_pivot_max] from configs/default.yaml (50..110), not
+    # the GR-textbook [50, 60].  For each top candidate the χ² is
+    # minimised over this window.
+    marginalize_N: bool = True
+    N_scan_points: int = 7
+    # Constant polishing: Nelder–Mead on the numeric constants of the
+    # top expressions against the production χ² (PySR constants are
+    # coarse; this typically buys large χ² factors at ~62 ms/eval).
+    polish_constants: bool = True
+    polish_maxfev: int = 120
+    refine_top_k: int = 6
 
     # Parallel re-ranking of candidate (V, ξ) pairs by the production χ²
     # (the post-PySR Python loops — the wall-clock hotspot of a search).
@@ -743,12 +814,29 @@ def expressions_to_model(V_expr: str, xi_expr: str = "0", *, name: str = "model"
 # ---------------------------------------------------------------------------
 # χ² loss as a function of expression strings
 # ---------------------------------------------------------------------------
+def _As_target(cfg: SearchConfig) -> float:
+    """Target scalar amplitude A_s from cfg (Planck default)."""
+    lnAs = cfg.target_lnAs if cfg.target_lnAs is not None else 3.044
+    return float(np.exp(lnAs) * 1.0e-10)
+
+
 def chi2_for_expressions(
     V_expr: str,
     xi_expr: str,
     cfg: SearchConfig,
 ) -> float:
-    """Evaluate χ² for a (V, ξ) expression pair using the production kernel."""
+    """Evaluate χ² for a (V, ξ) expression pair using the production kernel.
+
+    NORMALIZE-THEN-SCORE: the EOMs are exactly invariant under
+    V → λV, ξ → ξ/λ, so the amplitude A_s is exactly tunable for every
+    candidate and carries no shape information.  We therefore score the
+    λ-invariant shape observables only (n_s, r, α_s, …) — the ln A_s
+    term is identically zero after the exact rescaling, whose factor λ
+    is reported by `observables_for_result`.  (Previously the raw-
+    amplitude ln A_s term reached ~10⁶ for every O(1)-amplitude PySR
+    candidate and inverted the ranking against the ~10³ invalid
+    penalties.)
+    """
     try:
         with np.errstate(divide="ignore", invalid="ignore",
                          over="ignore", under="ignore"):
@@ -758,7 +846,7 @@ def chi2_for_expressions(
                     model,
                     target_ns=cfg.target_ns, sigma_ns=cfg.sigma_ns,
                     target_r=cfg.target_r, sigma_r=cfg.sigma_r,
-                    target_lnAs=cfg.target_lnAs, sigma_lnAs=cfg.sigma_lnAs,
+                    target_lnAs=None,        # exactly normalisable
                     omega_gw_targets=list(cfg.omega_gw_targets) or None,
                     omega_gw_band_min=cfg.omega_gw_band_min,
                     N_pivot=cfg.N_pivot,
@@ -766,7 +854,7 @@ def chi2_for_expressions(
                     enforce_egb=cfg.enforce_egb,
                     egb_min_delta1=cfg.egb_min_delta1,
                 )
-            # production (default): slow-roll closed-form with full perturbations
+            # production (default): N3LO analytic with full perturbations
             obs_full = compute_observables_full(
                 model,
                 N_pivot=cfg.N_pivot,
@@ -777,7 +865,7 @@ def chi2_for_expressions(
                 obs_full,
                 target_ns=cfg.target_ns, sigma_ns=cfg.sigma_ns,
                 target_r=cfg.target_r, sigma_r=cfg.sigma_r,
-                target_lnAs=cfg.target_lnAs, sigma_lnAs=cfg.sigma_lnAs,
+                target_lnAs=None,            # exactly normalisable (see above)
                 target_alphas=cfg.target_alphas, sigma_alphas=cfg.sigma_alphas,
                 target_nT=cfg.target_nT, sigma_nT=cfg.sigma_nT,
                 target_cT2=cfg.target_cT2, sigma_cT2=cfg.sigma_cT2,
@@ -786,12 +874,13 @@ def chi2_for_expressions(
                 egb_min_delta1=cfg.egb_min_delta1,
             )
     except Exception:
-        return 1.0e6
+        return 1.0e7
 
 
 def observables_for_result(V_expr: str, xi_expr: str, cfg: SearchConfig) -> dict:
-    """Production-grade observables for a (V, ξ) pair (slow-roll closed-form
-    is fine here — used only for ranking, not for the loss)."""
+    """Production-grade observables for a (V, ξ) pair, plus the exact
+    amplitude normalisation: λ = A_s^target / P_S and the normalised
+    expressions V_norm = λ·V, ξ_norm = ξ/λ (shape observables invariant)."""
     try:
         with np.errstate(divide="ignore", invalid="ignore",
                          over="ignore", under="ignore"):
@@ -800,7 +889,15 @@ def observables_for_result(V_expr: str, xi_expr: str, cfg: SearchConfig) -> dict
                 model, N_pivot=cfg.N_pivot,
                 phi_range=cfg.phi_search_range, n_grid=cfg.phi_search_grid,
             )
-            return o.as_dict()
+            out = o.as_dict()
+            if np.isfinite(o.P_S) and o.P_S > 0:
+                lam = _As_target(cfg) / float(o.P_S)
+                out["lambda_norm"] = lam
+                out["V_norm_expr"] = f"({lam:.6e})*({V_expr})"
+                out["xi_norm_expr"] = (f"({1.0/lam:.6e})*({xi_expr})"
+                                       if xi_expr.strip() not in ("0", "0.0")
+                                       else "0")
+            return out
     except Exception:
         return {}
 
@@ -873,6 +970,86 @@ def score_candidate_pairs(
         except Exception:
             pass  # fall through to serial
     return [_score_pair_worker(a) for a in args]
+
+
+
+
+# ---------------------------------------------------------------------------
+# Refinement: N-pivot marginalisation + constant polishing
+# ---------------------------------------------------------------------------
+def _subst_floats(expr_str: str, mapping: dict) -> str:
+    """Substitute float-constant values in a sympified expression string."""
+    phi = sp.Symbol("phi", real=True)
+    expr = sp.sympify(expr_str, locals={"phi": phi, "x0": phi})
+    return str(expr.subs(mapping, simultaneous=True))
+
+
+def refine_candidate(V_expr: str, xi_expr: str,
+                     cfg: SearchConfig) -> dict | None:
+    """N-marginalisation + constant polish of one (V, ξ) candidate.
+
+    1. Scan N_pivot over [N_pivot_min, N_pivot_max] from the config (the
+       EGB reheating window — up to ~2× the GR budget) and keep the best.
+    2. Nelder–Mead on the float constants of both expressions (relative
+       parametrisation c = c₀(1+x)) against the production χ² at that N.
+    Returns dict(V_expr, xi_expr, chi2, N_pivot) or None on failure.
+    """
+    try:
+        # ---- 1. N scan -------------------------------------------------
+        N_best, chi_best = cfg.N_pivot, chi2_for_expressions(
+            V_expr, xi_expr, cfg)
+        if cfg.marginalize_N:
+            N_lo = DEFAULTS.physics.N_pivot_min
+            N_hi = DEFAULTS.physics.N_pivot_max
+            for N in np.linspace(N_lo, N_hi, cfg.N_scan_points):
+                c = chi2_for_expressions(V_expr, xi_expr,
+                                         replace(cfg, N_pivot=float(N)))
+                if c < chi_best:
+                    chi_best, N_best = c, float(N)
+        cfg_N = replace(cfg, N_pivot=N_best)
+
+        # ---- 2. constant polish ----------------------------------------
+        V_out, xi_out = V_expr, xi_expr
+        if cfg.polish_constants:
+            phi = sp.Symbol("phi", real=True)
+            Ve = sp.sympify(V_expr, locals={"phi": phi, "x0": phi})
+            Xe = sp.sympify(xi_expr, locals={"phi": phi, "x0": phi})
+            cV = sorted(Ve.atoms(sp.Float), key=float)
+            cX = sorted(Xe.atoms(sp.Float), key=float)
+            consts = [float(c) for c in (*cV, *cX)]
+            nV = len(cV)
+            if consts:
+                from scipy.optimize import minimize
+
+                def build(x):
+                    vals = [c0 * (1.0 + xi_) for c0, xi_ in zip(consts, x)]
+                    Vm = {s: sp.Float(v) for s, v in zip(cV, vals[:nV])}
+                    Xm = {s: sp.Float(v) for s, v in zip(cX, vals[nV:])}
+                    return (str(Ve.subs(Vm, simultaneous=True)),
+                            str(Xe.subs(Xm, simultaneous=True)))
+
+                def obj(x):
+                    if np.any(np.abs(x) > 5.0):
+                        return 1.0e9
+                    Vn, Xn = build(x)
+                    return chi2_for_expressions(Vn, Xn, cfg_N)
+
+                n = len(consts)
+                res = minimize(obj, np.zeros(n), method="Nelder-Mead",
+                               options=dict(maxfev=cfg.polish_maxfev,
+                                            xatol=1e-3, fatol=1e-3))
+                if np.isfinite(res.fun) and res.fun < chi_best:
+                    chi_best = float(res.fun)
+                    V_out, xi_out = build(res.x)
+        return dict(V_expr=V_out, xi_expr=xi_out,
+                    chi2=chi_best, N_pivot=N_best)
+    except Exception:
+        return None
+
+
+def _refine_worker(args: tuple) -> dict | None:
+    V_expr, xi_expr, cfg = args
+    return refine_candidate(V_expr, xi_expr, cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -1059,12 +1236,38 @@ def run_joint_search(
     log(f"      [V search] Julia loss used: {julia_loss_used}; "
         f"{len(V_candidates)} unique candidates")
 
-    # Re-rank V candidates by EGB χ² (with ξ = 0), in parallel.
-    _scored_V = score_candidate_pairs(
-        [(vstr, "0") for vstr in V_candidates], cfg, want_obs=False)
-    V_ranked = sorted(((v, c) for v, _x, c, _o in _scored_V),
-                      key=lambda it: it[1])
-    log(f"      Top V (across families, with ξ=0): " + ", ".join(
+    # Pass-1 ranking: JOINT-AWARE.  Each V is scored at ξ = 0 AND against
+    # a fiducial ladder of linear GB couplings ξ_fid = (g/V(φ_*))·φ.  The
+    # rescaling-invariant coupling g ≡ ξ₀V₀ controls the EGB shift of
+    # (n_s, r), so potentials whose joint optimum requires ξ ≠ 0 (the
+    # post-ACT regime: e.g. Starobinsky needs g ≈ +0.01 to reach
+    # n_s ≈ 0.975) are no longer discarded by a ξ=0-only ranking.
+    _probe = score_candidate_pairs([(v, "0") for v in V_candidates], cfg,
+                                   want_obs=True)
+    FIDUCIAL_G = (1.0e-3, 5.0e-3, 1.0e-2, 3.0e-2, -1.0e-3, -1.0e-2)
+    ladder_pairs: list[tuple[str, str]] = []
+    for vstr, _x, _c0, obs0 in _probe:
+        phiN = obs0.get("phi_N")
+        if phiN is None or not np.isfinite(phiN):
+            continue
+        try:
+            Vc = float(expressions_to_model(vstr, "0").V(float(phiN)))
+        except Exception:
+            continue
+        if not (np.isfinite(Vc) and Vc > 0):
+            continue
+        for g_fid in FIDUCIAL_G:
+            ladder_pairs.append((vstr, f"({g_fid / Vc:.6e})*phi"))
+    _scored_ladder = score_candidate_pairs(ladder_pairs, cfg,
+                                           want_obs=False)
+    _best_chi: dict[str, float] = {v: c for v, _x, c, _o in _probe}
+    _best_fid_xi: dict[str, str] = {}
+    for vstr, xe, c, _o in _scored_ladder:
+        if c < _best_chi.get(vstr, math.inf):
+            _best_chi[vstr] = c
+            _best_fid_xi[vstr] = xe
+    V_ranked = sorted(_best_chi.items(), key=lambda it: it[1])
+    log(f"      Top V (joint-aware, min over fiducial ξ ladder): " + ", ".join(
         f"{v[:30]}…  χ²={c:.3g}" for v, c in V_ranked[:3]))
 
     # ---- Pass 2: for each top V, search ξ ----
@@ -1128,6 +1331,11 @@ def run_joint_search(
                 log(f"      PySR fit failed for ξ seed {fam.name!r}: {exc}")
                 continue
             xi_candidate_pool.extend(_hall_of_fame_strings(pysr_xi, top_k=cfg.top_k_V))
+        # Seed pass 2 with the winning fiducial linear coupling from the
+        # joint-aware pass-1 ranking (if any) so the known-good EGB
+        # direction is always in the pool.
+        if V_str in _best_fid_xi:
+            xi_candidate_pool.insert(0, _best_fid_xi[V_str])
         xi_candidates = list(dict.fromkeys(xi_candidate_pool))
         if not cfg.enforce_egb:
             xi_candidates = ["0", *xi_candidates]
@@ -1160,12 +1368,69 @@ def run_joint_search(
                 P_T=_get("P_T"),
                 c_T2=_get("c_T2"),
                 delta1=_get("delta1"),
-                extra={"V_index": v_idx, "loss_kind": cfg.loss_kind},
+                extra={"V_index": v_idx, "loss_kind": cfg.loss_kind,
+                       "lambda_norm": obs_dict.get("lambda_norm"),
+                       "V_norm_expr": obs_dict.get("V_norm_expr"),
+                       "xi_norm_expr": obs_dict.get("xi_norm_expr")},
             ))
 
     results.sort(key=lambda r: (math.inf if not math.isfinite(r.chi2) else r.chi2))
     log(f"Found {len(results)} candidates after passes 1+2; "
         f"best χ² = {results[0].chi2 if results else float('nan'):.3g}")
+
+    # ---- Refinement: N-pivot marginalisation + constant polishing ----
+    if (cfg.refine_top_k > 0 and results
+            and (cfg.marginalize_N or cfg.polish_constants)):
+        k_ref = min(cfg.refine_top_k, len(results))
+        log(f"[refine] N-scan (EGB window) + constant polish on top "
+            f"{k_ref} candidates …")
+        ref_args = [(r.V_expr, r.xi_expr, cfg) for r in results[:k_ref]]
+        refined: list = []
+        import os as _os
+        n_jobs = cfg.n_jobs or min(8, max(1, (_os.cpu_count() or 2) - 1))
+        if n_jobs > 1 and k_ref >= 2:
+            try:
+                ex = _get_scoring_pool(min(n_jobs, k_ref))
+                refined = list(ex.map(_refine_worker, ref_args))
+            except Exception:
+                refined = []
+        if not refined:
+            refined = [_refine_worker(a) for a in ref_args]
+        n_improved = 0
+        for idx, ref in enumerate(refined):
+            if not ref or not np.isfinite(ref["chi2"]):
+                continue
+            r_old = results[idx]
+            if not (ref["chi2"] < r_old.chi2):
+                continue
+            cfg_N = replace(cfg, N_pivot=float(ref["N_pivot"]))
+            obs = observables_for_result(ref["V_expr"], ref["xi_expr"],
+                                         cfg_N)
+
+            def _g(key, d=float("nan")):
+                v = obs.get(key, d)
+                return float(v) if v is not None else d
+
+            results[idx] = replace(
+                r_old, V_expr=ref["V_expr"], xi_expr=ref["xi_expr"],
+                chi2=float(ref["chi2"]),
+                n_s=_g("n_s"), r=_g("r"), epsilon=_g("epsilon"),
+                phi_N=_g("phi_N"), phi_end=_g("phi_end"),
+                n_T=_g("n_T"), alpha_s=_g("alpha_s"),
+                P_S=_g("P_S"), P_T=_g("P_T"), c_T2=_g("c_T2"),
+                delta1=_g("delta1"),
+                extra={**r_old.extra, "refined": True,
+                       "N_pivot_best": float(ref["N_pivot"]),
+                       "lambda_norm": obs.get("lambda_norm"),
+                       "V_norm_expr": obs.get("V_norm_expr"),
+                       "xi_norm_expr": obs.get("xi_norm_expr")},
+            )
+            n_improved += 1
+        results.sort(key=lambda r: (math.inf if not math.isfinite(r.chi2)
+                                    else r.chi2))
+        log(f"[refine] improved {n_improved}/{k_ref}; best χ² now = "
+            f"{results[0].chi2:.3g} "
+            f"(N* = {results[0].extra.get('N_pivot_best', cfg.N_pivot)})")
 
     # ---- Coordinate-descent joint refinement rounds ----
     if cfg.use_julia_loss and cfg.joint_rounds > 0 and results:
@@ -1297,7 +1562,7 @@ def run_joint_search_subprocess(
     proc = ctx.Process(
         target=_subprocess_worker,
         args=(cfg.to_dict(), result_q, log_q),
-        daemon=True,
+        daemon=False,   # non-daemonic: the search uses its own worker pools
     )
     proc.start()
 

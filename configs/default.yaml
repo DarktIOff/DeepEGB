@@ -5,11 +5,14 @@
 
 physics:
   # Pivot e-folds before end of inflation at which observables are evaluated.
-  # Range [50, 60] motivated by Liddle & Leach 2003 (astro-ph/0306262)
-  # and Martin & Ringeval 2010 (arXiv:1004.4654) self-consistency analysis.
+  # GR range [50, 60] is the Liddle & Leach 2003 / Martin & Ringeval 2010
+  # self-consistency window; in EGB the Gauss-Bonnet-modified reheating
+  # history can roughly DOUBLE the e-fold budget (see e.g. Odintsov & Paul,
+  # arXiv:2508.11377, ACT-driven EGB reheating), so the marginalisation
+  # window extends to N_pivot_max = 110.
   N_pivot: 55
   N_pivot_min: 50
-  N_pivot_max: 60
+  N_pivot_max: 110
   # Range of phi (in M_pl) to sample when searching for end-of-inflation.
   phi_range: [-15.0, 15.0]
   # Numerical step for derivatives / integration.
@@ -103,6 +106,11 @@ search:
       - "xi0 * (phi - phi0)^2"                           # quadratic minimum
       - "xi0 * abs(phi)"                                 # absolute-value coupling
       - "xi0 * sign(phi) * sqrt(abs(phi))"               # fractional power
+      # Positive-running directions (steep delta2 flow; ACT DR6 prefers
+      # dn_s/dlnk = +0.0062 +- 0.0052, unreachable in smooth GR slow roll):
+      - "xi0 * exp(-lambda * abs(phi - phi0))"           # steep localized exponential
+      - "a * phi + b * exp(-lambda * (phi - phi0))"      # two-component: tilt + running
+      - "xi0 * exp(-((phi - phi0) / w)**2)"              # Gaussian feature in xi
 
 targets:
   # Scalar tilt: n_s = 0.9752 ± 0.0030 (68%, P-ACT-LBDR2 = ACT DR6 + Planck
@@ -136,13 +144,15 @@ default_xi_expr: "xi0/(phi^2 + 1)"
 
 # Gravitational-wave spectrum defaults.
 gw:
-  # n_decades: log-decades of k around the pivot for the relic GW spectrum.
-  # Policy: 8 decades covers the LISA–DECIGO band; 10 gives the full RD+MD
-  # transition. More decades = slower but more complete spectrum.
+  # n_decades: total log-decades of k for the relic GW spectrum, anchored
+  # 2 decades below the CMB pivot and extending UPWARD.  The pivot maps to
+  # f ~ 8e-17 Hz today, so detector coverage needs: PTA ~ +9 decades,
+  # LISA ~ +14, ground-based ~ +18.  Default 20 reaches all of them
+  # (modes beyond the end of inflation are dropped automatically).
   # See Watanabe & Komatsu 2006 (astro-ph/0604176) for the transfer function.
-  n_decades: 8.0
+  n_decades: 20.0
   # n_k: number of k samples (log-spaced) for the relic GW spectrum.
-  n_k: 30
+  n_k: 48
   # T_reh_GeV: default reheating temperature in GeV. Controls the g_*
   # factor in the transfer function. 1e15 GeV ≈ instant reheating near GUT.
   # See Kuroyanagi et al. 2015 (arXiv:1407.4785) for T_reh sensitivity.

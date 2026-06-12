@@ -334,6 +334,20 @@ def integrate_background(
     # δ₁ = 4 ξ̇ H = 4 ξ_,φ φ̇ H = 4 ξ_,φ π H²
     delta1_grid = 4.0 * g["xip"] * pi_grid * (H_grid ** 2)
 
+    # Reject frozen/garbage trajectories: the RHS returns [0,0] when the
+    # Friedmann constraint has no valid root, which silently produces a
+    # fake constant-φ "de Sitter" trajectory that integrates to N_max.
+    bad = ~np.isfinite(H_grid) | ~np.isfinite(eps1_grid)
+    if bad.mean() > 0.01:
+        return None
+    # No ε₁=1 event AND ε₁ still far from 1 at the end ⇒ inflation never
+    # ends along this trajectory (or it froze) — not usable for a pivot
+    # counted from the end of inflation.
+    if len(sol.t_events[0]) == 0:
+        eps_tail = eps1_grid[np.isfinite(eps1_grid)]
+        if eps_tail.size == 0 or eps_tail[-1] < 0.9:
+            return None
+
     a_grid = np.exp(N_grid)             # a/a_init
     # Conformal time τ: dτ = dt/a, dt = dN/H ⇒ dτ = dN/(a H)
     integrand_tau = 1.0 / np.maximum(a_grid * H_grid, 1.0e-30)
@@ -359,32 +373,78 @@ def integrate_background(
 # ---------------------------------------------------------------------------
 # Convenience: pick a φ_init that yields ≥ N_pivot+buffer e-folds of inflation
 # ---------------------------------------------------------------------------
-def _slow_roll_phi_for_N(model: EGBModel, N_target: float,
-                         phi_range: tuple[float, float]) -> float | None:
-    """Use the slow-roll quadrature to pick a starting φ that should produce
-    ~N_target e-folds before end of inflation."""
-    phi_end = end_of_inflation(model, phi_range=phi_range, n_grid=4001)
-    if phi_end is None:
-        return None
-    # Walk outward from φ_end until ∫ V/Q ≈ N_target
-    sign = 1.0 if (phi_range[1] - phi_end) > (phi_end - phi_range[0]) else -1.0
-    phi = phi_end
-    accum = 0.0
+def _walk_phi_for_N(model: EGBModel, phi_end: float, N_target: float,
+                    phi_range: tuple[float, float],
+                    sign: float) -> float | None:
+    """Walk from φ_end in direction `sign`, accumulating slow-roll e-folds
+    N = ∫ V/Q dφ, but ONLY through the inflationary region (ε < 1, V > 0).
+    Returns the φ where N_target is reached, or None if the slow-roll
+    plateau on this side is too short / absent.
+
+    Restricting the walk to ε < 1 is essential: the old unconditional
+    quadrature happily accumulated fake e-folds across non-inflating
+    regions, sending e.g. Starobinsky-family models down the steep φ < 0
+    branch when phi_range was symmetric.
+    """
     n = 4001
     grid = np.linspace(phi_end, phi_end + sign * (max(phi_range) - min(phi_range)), n)
+    accum = 0.0
+    prev_VQ = None
     for i in range(1, n):
-        a, b = grid[i - 1], grid[i]
+        b = float(grid[i])
         try:
-            VQa = float(model.V(a)) / (float(model.V_phi(a))
-                                       + (4.0 / 3.0) * float(model.V(a)) ** 2 * float(model.xi_phi(a)))
-            VQb = float(model.V(b)) / (float(model.V_phi(b))
-                                       + (4.0 / 3.0) * float(model.V(b)) ** 2 * float(model.xi_phi(b)))
+            V = float(model.V(b))
+            if not np.isfinite(V) or V <= 0:
+                return None
+            eps = float(model.epsilon(b))
+            # allow a short ε ≥ 1 sliver right at φ_end (i ≤ 2), then
+            # require genuine slow roll
+            if not np.isfinite(eps) or (eps >= 1.0 and i > 2):
+                return None
+            Q = float(model.Q(b))
+            if Q == 0 or not np.isfinite(Q):
+                return None
+            VQ = V / Q
         except Exception:
             return None
-        accum += 0.5 * (VQa + VQb) * (b - a) * sign     # makes accum > 0
+        if prev_VQ is not None:
+            # |∫ V/Q dφ|: e-folds counted backwards from φ_end are
+            # positive along the genuine slow-roll side regardless of the
+            # rolling direction / sign of Q.  (The old signed accumulation
+            # went negative for Q < 0 branches and silently sent the walk
+            # through the non-inflating interior to the opposite basin.)
+            accum += abs(0.5 * (VQ + prev_VQ) * (grid[i] - grid[i - 1]))
+        prev_VQ = VQ
         if accum >= N_target:
-            return float(b)
+            return b
     return None
+
+
+def _slow_roll_phi_for_N(model: EGBModel, N_target: float,
+                         phi_range: tuple[float, float]) -> float | None:
+    """Backward-compatible single-result wrapper around the two-sided walk."""
+    cands = _phi_init_candidates(model, N_target, phi_range)
+    return cands[0] if cands else None
+
+
+def _phi_init_candidates(model: EGBModel, N_target: float,
+                         phi_range: tuple[float, float]) -> list[float]:
+    """φ_init candidates from BOTH sides of EVERY ε=1 crossing
+    (ε<1-restricted walks).  Models can have several inflationary basins
+    (e.g. ±φ for even potentials); all reachable ones are returned,
+    longest-plateau crossings first."""
+    from .egb_slow_roll import end_of_inflation_all
+    out: list[float] = []
+    for phi_end in end_of_inflation_all(model, phi_range=phi_range,
+                                        n_grid=4001)[:4]:
+        preferred = (1.0 if (phi_range[1] - phi_end) > (phi_end - phi_range[0])
+                     else -1.0)
+        for sign in (preferred, -preferred):
+            phi_init = _walk_phi_for_N(model, phi_end, N_target,
+                                       phi_range, sign)
+            if phi_init is not None and phi_init not in out:
+                out.append(phi_init)
+    return out
 
 
 def integrate_with_pivot(
@@ -397,6 +457,10 @@ def integrate_with_pivot(
     """Integrate so that the trajectory contains at least N_pivot+buffer
     e-folds of inflation, with the pivot crossing at N = N_end − N_pivot.
 
+    Tries the φ_init candidates from both sides of φ_end (each restricted
+    to a genuine ε < 1 plateau) and returns the first whose full ODE
+    trajectory actually contains the pivot.
+
     N_pivot and phi_range default to the centralized config values.
     """
     from ..config.defaults import DEFAULTS
@@ -404,8 +468,9 @@ def integrate_with_pivot(
         N_pivot = DEFAULTS.N_pivot
     if phi_range is None:
         phi_range = DEFAULTS.phi_range
-    phi_init = _slow_roll_phi_for_N(model, N_pivot + buffer, phi_range)
-    if phi_init is None:
-        return None
-    traj = integrate_background(model, phi_init, N_max=N_pivot + 2 * buffer + 20.0)
-    return traj
+    for phi_init in _phi_init_candidates(model, N_pivot + buffer, phi_range):
+        traj = integrate_background(model, phi_init,
+                                    N_max=N_pivot + 2 * buffer + 20.0)
+        if traj is not None and traj.N_end > N_pivot:
+            return traj
+    return None

@@ -136,6 +136,30 @@ XI_FAMILIES: tuple[SeedFamily, ...] = (
         fn=lambda phi: 0.1 * np.cos(phi) + 0.15,
         description="Periodic / axionic GB coupling (Satoh-Soda-style).",
     ),
+    # ---- positive-running directions (steep / featured couplings) ------
+    # A steep ξ gives a large flow ratio δ₂ = dln δ₁/dN at small δ₁; the
+    # α_s gain over the n_s cost scales as δ₂, so these shapes are where
+    # EGB can generate the positive running mildly preferred by ACT DR6
+    # (dn_s/dlnk = +0.0062 ± 0.0052) — unreachable for smooth GR slow roll.
+    SeedFamily(
+        name="steep_exp",
+        fn=lambda phi: 0.1 * np.exp(-10.0 * np.abs(phi - 4.0)) + 1e-5,
+        description="Steep exponential coupling (large δ₂; positive-running "
+                    "direction).",
+    ),
+    SeedFamily(
+        name="two_component",
+        fn=lambda phi: 0.02 * phi - 0.05 * np.exp(-10.0 * np.abs(phi - 5.0)),
+        description="Linear + steep-exponential two-component coupling: the "
+                    "linear part blue-shifts n_s, the steep part drives "
+                    "α_s > 0.",
+    ),
+    SeedFamily(
+        name="gauss_bump",
+        fn=lambda phi: 0.1 * np.exp(-((phi - 5.0) / 0.5) ** 2) + 1e-5,
+        description="Localised Gaussian feature in ξ near the pivot "
+                    "(scale-dependent flow ⇒ running).",
+    ),
 )
 
 

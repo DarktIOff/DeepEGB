@@ -78,7 +78,7 @@ def soft_invalid_penalty(
     *,
     phi_range: tuple[float, float] | None = None,
     n_grid: int = 401,
-    floor: float = 1.0e3,
+    floor: float = 1.0e6,
 ) -> tuple[float, list[str]]:
     """Return (penalty, reasons) for an invalid model.
 

@@ -86,6 +86,42 @@ def analyze_egb_model(
     }
 
 
+
+
+def _detector_summary(f_Hz, omega_gw_h2) -> list[dict]:
+    """Per-detector detectability summary for a relic GW spectrum.
+
+    For every experiment in the catalogue, find the in-band frequency
+    where the model is closest to (or furthest above) the sensitivity
+    floor and report the margin in decades.
+    """
+    from ..physics.detectors import DETECTORS
+
+    f = np.asarray(f_Hz, dtype=float)
+    om = np.asarray(omega_gw_h2, dtype=float)
+    ok = np.isfinite(f) & np.isfinite(om) & (f > 0) & (om > 0)
+    f, om = f[ok], om[ok]
+    out: list[dict] = []
+    for det in DETECTORS:
+        mask = (f >= det.f_min_Hz) & (f <= det.f_max_Hz)
+        if not mask.any():
+            out.append(dict(name=det.name, probe=det.probe, era=det.era,
+                            in_band=False))
+            continue
+        sens = det.sensitivity(f[mask])
+        ratio = om[mask] / sens
+        i = int(np.argmax(ratio))
+        out.append(dict(
+            name=det.name, probe=det.probe, era=det.era, in_band=True,
+            f_best_Hz=float(f[mask][i]),
+            omega_gw_h2=float(om[mask][i]),
+            sensitivity_floor=float(sens[i]),
+            margin_decades=float(np.log10(max(ratio[i], 1e-300))),
+            detectable=bool(ratio[i] >= 1.0),
+        ))
+    return out
+
+
 def analyze_egb_relic_gw(
     V_expr: str,
     xi_expr: str | None = None,
@@ -144,7 +180,14 @@ def analyze_egb_relic_gw(
             "diagnosis": diag,
         }
     k_pivot = k_pivot_from_traj(traj, N_pivot=N)
-    k_arr = k_pivot * np.logspace(-n_decades / 2, n_decades / 2, n_k)
+    # Asymmetric band: 2 decades below the CMB pivot, the rest ABOVE it —
+    # the pivot maps to f ~ 8e-17 Hz today, so reaching the PTA (1e-8 Hz)
+    # and LISA (1e-3 Hz) bands requires ~+9 and ~+14 decades respectively.
+    # (The old pivot-centred ±n/2 band never reached any detector.)
+    # Modes with k beyond the end of inflation come back NaN and are
+    # excluded automatically.
+    dec_down = min(2.0, n_decades / 4.0)
+    k_arr = k_pivot * np.logspace(-dec_down, n_decades - dec_down, n_k)
     spec = relic_gw_spectrum(model, k_arr, traj=traj, N_pivot=N, T_reh_GeV=T_reh_GeV)
     return {
         "V_expr": V_expr,
@@ -162,5 +205,8 @@ def analyze_egb_relic_gw(
         "transfer_sq": spec.transfer_sq.tolist(),
         "Omega_GW_h2": spec.Omega_GW_h2.tolist(),
         "k_pivot_inflation": k_pivot,
+        "detector_summary": (
+            _detector_summary(spec.f_today, spec.Omega_GW_h2)
+            if spec.f_today is not None else []),
         "valid": bool(np.isfinite(spec.Omega_GW_h2).any()),
     }
